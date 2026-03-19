@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="manifest" href="/manifest.json">
+    <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/2322/2322701.png">
+    <title>ColdSense | Portal</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://unpkg.com/tippy.js@6/dist/tippy.css" />
+    <link rel="stylesheet" href="https://unpkg.com/tippy.js@6/animations/shift-away.css" />
+    <script src="https://unpkg.com/@popperjs/core@2"></script>
+    <script src="https://unpkg.com/tippy.js@6"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        .history-status { font-size:0.55rem; font-weight:900; padding:2px 6px; border-radius:4px; text-transform:uppercase; }
+        .history-status.pending { background:rgba(255,165,0,0.1); color:orange; }
+        .history-status.success { background:rgba(0,212,129,0.1); color:var(--success); }
+        .history-status.error { background:rgba(255,77,77,0.1); color:var(--danger); }
+        .pwa-install-banner { position:fixed; bottom:24px; left:24px; right:24px; background:var(--unifi-blue); color:white; padding:1rem; border-radius:16px; display:flex; align-items:center; justify-content:space-between; box-shadow:0 20px 40px rgba(0,0,0,0.4); z-index:9999; }
+    </style>
+</head>
+<body class="theme-dark">
+
+    <aside class="sidebar hidden" id="main-sidebar">
+        <div class="sidebar-logo">
+            <span style="color:var(--unifi-blue); font-size:1.6rem;">❄️</span>
+            <span class="logo-text" style="font-weight:900; letter-spacing:-1px;">COLDSENSE</span>
+        </div>
+        <nav class="nav-group">
+            <button class="nav-btn active" data-view="dashboard" data-tippy-content="Monitoreo en tiempo real">
+                <i data-lucide="layout-dashboard" style="width:20px;height:20px;"></i><span>Dashboard</span>
+            </button>
+            <button class="nav-btn" data-view="devices" data-tippy-content="Configuración de hardware">
+                <i data-lucide="hard-drive" style="width:20px;height:20px;"></i><span>Equipos</span>
+            </button>
+            <button class="nav-btn" data-view="commands" data-tippy-content="Gestión de comandos ejecutados">
+                <i data-lucide="send" style="width:20px;height:20px;"></i><span>Comandos</span>
+            </button>
+            <button class="nav-btn" data-view="branches" data-tippy-content="Mapa de sucursales">
+                <i data-lucide="map-pin" style="width:20px;height:20px;"></i><span>Ubicaciones</span>
+            </button>
+        </nav>
+        <div style="margin-top:auto; padding:1.2rem; display:flex; flex-direction:column; gap:6px;">
+            <button onclick="toggleTheme()" class="nav-btn" data-tippy-content="Alternar Luz/Oscuro">
+                <i data-lucide="sun" id="theme-icon" style="width:20px;height:20px;"></i><span>Apariencia</span>
+            </button>
+            <button onclick="handleLogout()" class="nav-btn" style="color:var(--danger);" data-tippy-content="Desconectar del portal">
+                <i data-lucide="log-out" style="width:20px;height:20px;"></i><span>Salir</span>
+            </button>
+        </div>
+    </aside>
+
+    <main class="main-carrier hidden" id="main-content">
+        <header class="top-bar">
+            <div style="display:flex; align-items:center; gap:1.2rem;">
+                <button id="sidebar-toggle" class="nav-btn" style="padding:0; width:36px; height:36px; display:flex; align-items:center; justify-content:center;">
+                    <i data-lucide="menu" style="width:20px;height:20px;"></i>
+                </button>
+                <div>
+                    <h2 id="view-title" style="font-weight:900; text-transform:uppercase; font-size:0.8rem; letter-spacing:2px; color:var(--unifi-blue);">SISTEMA ACTIVO</h2>
+                    <div id="breadcrumb" class="breadcrumb" style="font-size:0.6rem; font-weight:600; opacity:0.6;">DASHBOARD / RESUMEN</div>
+                </div>
+            </div>
+            <div style="display:flex; align-items:center; gap:1.2rem;">
+                <div class="pill" style="color:var(--success); background:rgba(0,212,129,0.06); padding:4px 10px;">
+                    <span class="status-orb online"></span> <span style="font-weight:900; font-size:0.6rem; letter-spacing:1px;">CORE ENGINE</span>
+                </div>
+                <div id="user-info" style="display:flex; align-items:center; gap:8px;">
+                    <span id="user-name" style="font-weight:900; font-size:0.75rem; color:var(--unifi-blue);">---</span>
+                    <div style="width:32px; height:32px; background:var(--input-bg); border-radius:50%; display:flex; align-items:center; justify-content:center; border:1px solid var(--border-light);">
+                        <i data-lucide="user" style="width:16px;height:16px;"></i>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- DASHBOARD -->
+        <section id="view-dashboard" class="view-module">
+            <div id="client-dashboard-grid" class="metrics-grid"></div>
+        </section>
+
+        <!-- COMANDOS -->
+        <section id="view-commands" class="view-module hidden">
+            <div class="enterprise-table-wrapper">
+                <div class="table-header">
+                    <h3 style="font-size:0.75rem; font-weight:900; letter-spacing:1px;"><i data-lucide="send" style="width:14px;height:14px;vertical-align:middle;margin-right:6px;"></i> LOG DE COMANDOS</h3>
+                    <button class="btn-sm btn-ghost" onclick="loadHistory()"><i data-lucide="refresh-cw" style="width:12px;height:12px;"></i> Actualizar</button>
+                </div>
+                <div style="overflow-x:auto;">
+                    <table>
+                        <thead><tr>
+                            <th>FECHA</th>
+                            <th>COMANDO</th>
+                            <th>EQUIPO</th>
+                            <th>STATUS</th>
+                            <th>OPERACIÓN</th>
+                        </tr></thead>
+                        <tbody id="history-table-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- MIS EQUIPOS -->
+        <section id="view-devices" class="view-module hidden">
+            <div class="enterprise-table-wrapper">
+                <div class="table-header">
+                    <h3 style="font-size:0.75rem; font-weight:900; letter-spacing:1px;"><i data-lucide="hard-drive" style="width:14px;height:14px;vertical-align:middle;margin-right:6px;"></i> MI FLOTA</h3>
+                    <input type="text" id="search-my-devices" class="unifi-input" style="width:200px; margin:0;" placeholder="Filtrar hardware...">
+                </div>
+                <div style="overflow-x:auto;">
+                    <table>
+                        <thead><tr>
+                            <th>ID</th>
+                            <th>NOMBRE</th>
+                            <th>TEMPS</th>
+                            <th>PUERTA</th>
+                            <th>NETWORK</th>
+                            <th>ACCIONES</th>
+                        </tr></thead>
+                        <tbody id="my-sensors-table"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- SUCURSALES -->
+        <section id="view-branches" class="view-module hidden">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.5rem;">
+                <h3 style="font-size:0.75rem; font-weight:900;"><i data-lucide="map-pin" style="width:14px;height:14px;vertical-align:middle;margin-right:6px;"></i> SUCURSALES</h3>
+                <button onclick="openBranchModal()" class="btn-sm btn-primary">+ GESTIONAR SEDE</button>
+            </div>
+            <div id="branches-list" class="metrics-grid"></div>
+        </section>
+    </main>
+
+    <!-- MODAL: GRÁFICA -->
+    <div id="graph-modal" class="modal-overlay hidden">
+        <div class="modal-unifi" style="max-width:850px; width:95%;">
+            <div class="modal-header">
+                <div>
+                    <h2 id="graph-title" style="font-weight:900; font-size:1rem; color:var(--unifi-blue);">Historial de Temperatura</h2>
+                    <p id="graph-subtitle" style="font-size:0.6rem; opacity:0.5; font-weight:700;">DATOS ANALÍTICOS (ÚLTIMAS 100 LECTURAS)</p>
+                </div>
+                <button class="modal-close" onclick="closeGraphModal()"><i data-lucide="x" style="width:18px;height:18px;"></i></button>
+            </div>
+            <div style="height:450px; margin-top:1.5rem; background:rgba(0,0,0,0.1); border-radius:12px; padding:1.5rem;">
+                <canvas id="sensor-chart"></canvas>
+            </div>
+        </div>
+    </div>
+
+
+    <div class="sonner-container" id="sonner-container"></div>
+
+    <script src="client.js"></script>
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/sw.js');
+        }
+    </script>
+</body>
+</html>

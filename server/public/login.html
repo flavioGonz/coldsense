@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ColdSense | Acceso</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://unpkg.com/tippy.js@6/dist/tippy.css" />
+    <script src="https://unpkg.com/@popperjs/core@2"></script>
+    <script src="https://unpkg.com/tippy.js@6"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        body { margin:0; height:100vh; overflow:hidden; }
+        #auth-view { 
+            display:flex; align-items:center; justify-content:center; 
+            height:100vh; background: radial-gradient(circle at center, #1a1b1e, #0f1012); 
+        }
+        .login-box { 
+            width:340px; padding:3rem 2.5rem; 
+            background:rgba(255,255,255,0.03); 
+            border:1px solid rgba(255,255,255,0.06); 
+            border-radius:24px; backdrop-filter:blur(20px);
+            box-shadow:0 50px 100px rgba(0,0,0,0.6); text-align:center;
+        }
+        .logo-glow { font-size:3rem; margin-bottom:1.5rem; filter:drop-shadow(0 0 20px var(--unifi-blue)); }
+        .input-group { position:relative; margin-bottom:1rem; }
+        .input-icon { position:absolute; left:14px; top:50%; transform:translateY(-50%); color:var(--text-secondary); opacity:0.4; }
+        .eye-icon { position:absolute; right:14px; top:50%; transform:translateY(-50%); cursor:pointer; color:var(--text-secondary); }
+        .login-input { padding-left:42px !important; }
+    </style>
+</head>
+<body>
+    <div id="auth-view">
+        <div class="login-box">
+            <div class="logo-glow">❄️</div>
+            <h1 style="font-weight:900; letter-spacing:-2px; margin-bottom:0.5rem; color:#fff;">COLDSENSE</h1>
+            <p style="color:var(--text-secondary); font-size:0.65rem; font-weight:800; text-transform:uppercase; margin-bottom:2.5rem; letter-spacing:3px;">Portal Cliente</p>
+            
+            <form id="login-form">
+                <div class="input-group">
+                    <i data-lucide="user" class="input-icon" style="width:16px;height:16px;"></i>
+                    <input type="text" id="username" class="unifi-input login-input" placeholder="Usuario" required data-tippy-content="Ingresa tu ID de cliente proporcionado por el administrador">
+                </div>
+                
+                <div class="input-group">
+                    <i data-lucide="lock" class="input-icon" style="width:16px;height:16px;"></i>
+                    <input type="password" id="password" class="unifi-input login-input" placeholder="Contraseña" required data-tippy-content="Tu contraseña de acceso seguro">
+                    <i data-lucide="eye" class="eye-icon" id="toggle-pass" style="width:16px;height:16px;"></i>
+                </div>
+                
+                <button type="submit" class="btn-unifi" style="height:50px; font-size:0.85rem; margin-top:1rem;">ACCEDER</button>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        lucide.createIcons();
+        tippy('[data-tippy-content]', { theme: 'unifi', animation: 'shift-away' });
+
+        const toggleBtn = document.getElementById('toggle-pass');
+        const passInput = document.getElementById('password');
+        toggleBtn.addEventListener('click', () => {
+            const type = passInput.type === 'password' ? 'text' : 'password';
+            passInput.type = type;
+            toggleBtn.innerHTML = type === 'password' ? lucide.icons.eye.toSvg() : lucide.icons['eye-off'].toSvg();
+        });
+
+        document.getElementById('login-form').onsubmit = async (e) => {
+            e.preventDefault();
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const r = await fetch('/api/auth/login', {
+                method:'POST',
+                headers:{'Content-Type':'application/json'},
+                body:JSON.stringify({ username, password })
+            });
+            if (r.ok) window.location.href = '/';
+            else alert('Error de autenticación');
+        };
+    </script>
+</body>
+</html>

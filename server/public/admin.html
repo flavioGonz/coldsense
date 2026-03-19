@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ColdSense | Admin SaaS</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/style.css">
+    <link rel="stylesheet" href="https://unpkg.com/tippy.js@6/dist/tippy.css" />
+    <link rel="stylesheet" href="https://unpkg.com/tippy.js@6/animations/shift-away.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+    <script src="https://unpkg.com/@popperjs/core@2"></script>
+    <script src="https://unpkg.com/tippy.js@6"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+    
+    <aside class="sidebar" id="main-sidebar">
+        <div class="sidebar-logo">
+            <span style="color:var(--unifi-blue); font-size:1.6rem;">❄️</span>
+            <span class="logo-text" style="font-weight:900; letter-spacing:-1px;">COLDSENSE</span>
+        </div>
+        <nav class="nav-group">
+            <button class="nav-btn active" data-view="dashboard" data-tippy-content="Resumen del Sistema">
+                <i data-lucide="layout-dashboard" style="width:20px;height:20px;"></i><span>Dashboard</span>
+            </button>
+            <button class="nav-btn" data-view="devices" data-tippy-content="Hardware ESP32">
+                <i data-lucide="hard-drive" style="width:20px;height:20px;"></i><span>Equipos</span>
+            </button>
+            <button class="nav-btn" data-view="clients" data-tippy-content="Empresas Clientes">
+                <i data-lucide="building-2" style="width:20px;height:20px;"></i><span>Empresas SaaS</span>
+            </button>
+            <button class="nav-btn" data-view="firmwares" data-tippy-content="Control de Versiones ESP32">
+                <i data-lucide="code" style="width:20px;height:20px;"></i><span>Firmwares</span>
+            </button>
+            <div class="nav-divider"></div>
+            <button class="nav-btn" data-view="events" data-tippy-content="Tráfico MQTT">
+                <i data-lucide="activity" style="width:20px;height:20px;"></i><span>Eventos</span>
+            </button>
+            <button class="nav-btn" data-view="map" data-tippy-content="Geolocalización">
+                <i data-lucide="map-pin" style="width:20px;height:20px;"></i><span>Mapa</span>
+            </button>
+            <button class="nav-btn" data-view="config" data-tippy-content="Ajustes">
+                <i data-lucide="settings" style="width:20px;height:20px;"></i><span>Configuración</span>
+            </button>
+        </nav>
+        <div style="margin-top:auto; padding:1rem; display:flex; flex-direction:column; gap:4px;">
+            <button onclick="toggleTheme()" class="nav-btn">
+                <i data-lucide="moon" style="width:20px;height:20px;"></i><span>Tema</span>
+            </button>
+            <button onclick="handleLogout()" class="nav-btn" style="color:var(--danger);">
+                <i data-lucide="log-out" style="width:20px;height:20px;"></i><span>Cerrar Sesión</span>
+            </button>
+        </div>
+    </aside>
+
+    <main class="main-carrier">
+        <header class="top-bar">
+            <div style="display:flex; align-items:center; gap:1.2rem;">
+                <button id="sidebar-toggle" style="background:none; border:none; color:var(--text-primary); cursor:pointer;">
+                    <i data-lucide="menu" style="width:20px;height:20px;"></i>
+                </button>
+                <div>
+                    <h2 id="view-title" style="font-weight:800; text-transform:uppercase; font-size:0.85rem; letter-spacing:1px; color:var(--unifi-blue);">Dashboard</h2>
+                    <div id="breadcrumb" class="breadcrumb"></div>
+                </div>
+            </div>
+            <div style="display:flex; align-items:center; gap:1rem;">
+                <div class="pill" style="color:var(--success); background:rgba(0,212,129,0.08); border:1px solid rgba(0,212,129,0.12);">
+                    <span class="status-orb online"></span> MQTT Activo
+                </div>
+                <div class="theme-toggle" onclick="toggleTheme()"></div>
+            </div>
+        </header>
+
+        <!-- DASHBOARD -->
+        <section id="view-dashboard" class="view-module">
+            <div class="metrics-grid">
+                <div class="unifi-card"><span class="label"><i data-lucide="building-2" style="width:12px;height:12px;vertical-align:middle;margin-right:4px;"></i> Empresas</span><span class="value" id="stat-clients">0</span></div>
+                <div class="unifi-card"><span class="label"><i data-lucide="hard-drive" style="width:12px;height:12px;vertical-align:middle;margin-right:4px;"></i> Equipos</span><span class="value" id="stat-sensors">0</span></div>
+                <div class="unifi-card"><span class="label"><i data-lucide="clock" style="width:12px;height:12px;vertical-align:middle;margin-right:4px;"></i> Pendientes</span><span class="value" id="stat-pending" style="color:var(--warning)">0</span></div>
+            </div>
+        </section>
+
+        <!-- EQUIPOS -->
+        <section id="view-devices" class="view-module hidden">
+            <div class="enterprise-table-wrapper">
+                <div class="table-header">
+                    <h3 style="font-size:0.72rem; font-weight:900; display:flex; align-items:center; gap:8px;"><i data-lucide="hard-drive" style="width:15px;height:15px;color:var(--unifi-blue);"></i> EQUIPOS GESTIONADOS</h3>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <input type="text" id="search-devices" class="unifi-input" style="width:220px; margin:0;" placeholder="Buscar...">
+                        <button onclick="fetchDevices()" class="btn-sm btn-ghost"><i data-lucide="refresh-cw" style="width:13px;height:13px;"></i></button>
+                    </div>
+                </div>
+                <div style="overflow-x:auto;">
+                    <table>
+                        <thead><tr>
+                            <th data-tippy-content="Dirección MAC"><i data-lucide="cpu" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> ID</th>
+                            <th data-tippy-content="IP Local / MAC"><i data-lucide="network" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> Red (IP/MAC)</th>
+                            <th data-tippy-content="Nombre asignado"><i data-lucide="tag" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> Nombre</th>
+                            <th data-tippy-content="Sensores térmicos (<In> / <Out>)"><i data-lucide="thermometer" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> Temps (IN/OUT)</th>
+                            <th data-tippy-content="Estado de puerta"><i data-lucide="door-open" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> Puerta</th>
+                            <th data-tippy-content="Tiempo de actividad"><i data-lucide="clock" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> Uptime</th>
+                            <th data-tippy-content="Cliente / Firmware"><i data-lucide="building-2" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> Cliente / FW / RSSI</th>
+                            <th>Acciones</th>
+                        </tr></thead>
+                        <tbody id="sensors-list-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- EMPRESAS -->
+        <section id="view-clients" class="view-module hidden">
+            <div class="enterprise-table-wrapper">
+                <div class="table-header">
+                    <h3 style="font-size:0.72rem; font-weight:900; display:flex; align-items:center; gap:8px;"><i data-lucide="building-2" style="width:15px;height:15px;color:var(--unifi-blue);"></i> EMPRESAS SAAS</h3>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <input type="text" id="search-clients" class="unifi-input" style="width:220px; margin:0;" placeholder="Buscar empresa...">
+                        <button onclick="openNewClientModal()" class="btn-sm btn-primary"><i data-lucide="plus" style="width:13px;height:13px;"></i> Nueva Empresa</button>
+                    </div>
+                </div>
+                <table>
+                    <thead><tr>
+                        <th><i data-lucide="building-2" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> Empresa</th>
+                        <th data-tippy-content="Equipos vinculados"><i data-lucide="hard-drive" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> Flota</th>
+                        <th><i data-lucide="signal" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> Estado</th>
+                        <th>ID</th>
+                        <th>Acciones</th>
+                    </tr></thead>
+                    <tbody id="clients-list-container"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- FIRMWARES -->
+        <section id="view-firmwares" class="view-module hidden">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.5rem;">
+                <h3 style="font-size:0.75rem; font-weight:900;"><i data-lucide="code" style="width:14px;height:14px;vertical-align:middle;margin-right:6px;"></i> CONTROL DE VERSIONES</h3>
+                <button onclick="openFirmwareModal()" class="btn-sm btn-primary">+ NUEVA VERSIÓN</button>
+            </div>
+            <div class="enterprise-table-wrapper">
+                <table>
+                    <thead><tr>
+                        <th>VERSIÓN</th>
+                        <th>BINARIO (URL)</th>
+                        <th>CHANGELOG</th>
+                        <th>FECHA</th>
+                        <th>ACCIONES</th>
+                    </tr></thead>
+                    <tbody id="firmwares-table-body"></tbody>
+                </table>
+            </div>
+        </section>
+
+            <div class="enterprise-table-wrapper">
+                <div class="table-header">
+                    <h3 style="font-size:0.72rem; font-weight:900; display:flex; align-items:center; gap:8px;"><i data-lucide="activity" style="width:15px;height:15px;color:var(--unifi-blue);"></i> FLUJO DE RED</h3>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <input type="text" id="search-events" class="unifi-input" style="width:220px; margin:0;" placeholder="Filtrar...">
+                        <button onclick="allEvents=[];renderEvents();" class="btn-sm btn-danger"><i data-lucide="trash-2" style="width:13px;height:13px;"></i> Limpiar</button>
+                    </div>
+                </div>
+                <div style="max-height:calc(100vh - 200px); overflow:auto;">
+                    <table>
+                        <thead><tr>
+                            <th><i data-lucide="radio" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> Origen</th>
+                            <th><i data-lucide="hash" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> Tópico</th>
+                            <th>Estado</th>
+                            <th><i data-lucide="clock" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> Hora</th>
+                        </tr></thead>
+                        <tbody id="events-log"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- MAPA -->
+        <section id="view-map" class="view-module hidden" style="padding:0; overflow:hidden; position:relative;">
+            <div id="map-command-bar" class="map-command-bar">
+                <i data-lucide="search" style="width:16px;height:16px;opacity:0.4;"></i>
+                <input type="text" id="map-search-input" placeholder="Buscar sensor o dispositivo..." oninput="handleMapSearch()">
+                <div id="map-search-results" class="map-search-results hidden"></div>
+            </div>
+            <div id="map" style="width:100%; flex:1; min-height:0;"></div>
+        </section>
+
+        <!-- CONFIG -->
+        <section id="view-config" class="view-module hidden">
+            <div class="unifi-card" style="max-width:550px;">
+                <h3 style="font-weight:900; margin-bottom:2rem; display:flex; align-items:center; gap:8px;"><i data-lucide="settings" style="width:18px;height:18px;color:var(--unifi-blue);"></i> CONFIGURACIÓN</h3>
+                <div class="label">Infraestructura MQTT</div>
+                <div class="unifi-card" style="background:var(--input-bg); margin-top:0.5rem; margin-bottom:1.5rem;">
+                    <p style="font-size:0.75rem; color:var(--text-secondary);">Broker: 0.0.0.0 (Global)</p>
+                    <p style="font-size:0.75rem; color:var(--text-secondary); margin-top:4px;">Puerto: 1883 (TCP)</p>
+                </div>
+                <button class="btn-unifi" style="background:var(--danger);" onclick="sonner('No permitido en producción','error','Seguridad')">PURGAR TELEMETRÍA</button>
+            </div>
+        </section>
+    </main>
+
+    <!-- MODAL: NUEVA EMPRESA -->
+    <div id="new-client-modal" class="modal-overlay hidden">
+        <div class="modal-unifi">
+            <div class="modal-header">
+                <h2 style="font-weight:900; font-size:1rem; color:var(--unifi-blue); display:flex; align-items:center; gap:8px;"><i data-lucide="building-2" style="width:18px;height:18px;"></i> Nueva Empresa</h2>
+                <button class="modal-close" onclick="closeNewClientModal()"><i data-lucide="x" style="width:18px;height:18px;"></i></button>
+            </div>
+            <form id="create-client-form">
+                <label class="label">Razón Social</label>
+                <input type="text" id="client-name" class="unifi-input" placeholder="Ej: Frigorífico Sur" required>
+                <label class="label">Username</label>
+                <input type="text" id="admin-user" class="unifi-input" placeholder="Ej: admin_frio" required>
+                <label class="label">Contraseña</label>
+                <input type="password" id="admin-pass" class="unifi-input" placeholder="Contraseña" required>
+                <div style="display:flex; gap:8px; margin-top:0.5rem;">
+                    <button type="submit" class="btn-unifi" style="flex:1;">CREAR</button>
+                    <button type="button" onclick="closeNewClientModal()" class="btn-unifi" style="flex:0.4; background:var(--input-bg); color:var(--text-primary);">CANCELAR</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- MODAL: EDITAR EQUIPO -->
+    <div id="edit-device-modal" class="modal-overlay hidden">
+        <div class="modal-unifi">
+            <div class="modal-header">
+                <h2 id="modal-edit-title" style="font-weight:900; font-size:1rem; color:var(--unifi-blue); display:flex; align-items:center; gap:8px;"></h2>
+                <button class="modal-close" onclick="closeEditModal()"><i data-lucide="x" style="width:18px;height:18px;"></i></button>
+            </div>
+            <label class="label">Nombre del Sensor</label>
+            <input type="text" id="edit-sensor-name" class="unifi-input" placeholder="Ej: Cámara Fría 1">
+            <label class="label">Cliente Propietario</label>
+            <select id="edit-sensor-client" class="unifi-input"></select>
+            <label class="label">URL Foto Dispositivo</label>
+            <input type="text" id="edit-sensor-photo" class="unifi-input" placeholder="https://ejemplo.com/foto.jpg">
+            
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:0 12px; margin-top:1rem;">
+                <div><label class="label">Temp Mín (°C)</label><input type="number" id="edit-sensor-tmin" class="unifi-input" value="-20.0"></div>
+                <div><label class="label">Temp Máx (°C)</label><input type="number" id="edit-sensor-tmax" class="unifi-input" value="10.0"></div>
+            </div>
+
+            <div style="margin-top:1rem;">
+                <label class="label">Seleccionar Firmware para Update</label>
+                <select id="edit-sensor-fw-select" class="unifi-input"></select>
+            </div>
+
+
+            <div style="margin-top:1.5rem; padding-top:1rem; border-top:1px solid var(--border-light); display:flex; justify-content:space-between; align-items:center;">
+                <div style="font-size:0.65rem; color:var(--text-secondary);"><i data-lucide="info" style="width:12px;height:12px;vertical-align:middle;"></i> OTA Update disponible</div>
+                <button type="button" id="ota-update-btn" class="btn-sm btn-ghost" style="color:var(--unifi-blue); border:1px solid var(--unifi-blue);"><i data-lucide="upload-cloud" style="width:13px;height:13px;"></i> LANZAR UPDATE</button>
+            </div>
+
+            <div style="display:flex; gap:8px; margin-top:1.5rem;">
+                <button id="save-device-btn" class="btn-unifi" style="flex:1;">GUARDAR</button>
+                <button onclick="closeEditModal()" class="btn-unifi" style="flex:0.4; background:var(--input-bg); color:var(--text-primary);">CANCELAR</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: ELIMINAR -->
+    <div id="delete-device-modal" class="modal-overlay hidden">
+        <div class="modal-unifi" style="text-align:center;">
+            <div style="width:56px;height:56px;border-radius:50%;background:rgba(255,77,77,0.1);display:flex;align-items:center;justify-content:center;margin:0 auto 1.5rem;">
+                <i data-lucide="alert-triangle" style="width:28px;height:28px;color:var(--danger);"></i>
+            </div>
+            <h2 style="font-weight:900; margin-bottom:0.5rem;">Eliminar Equipo</h2>
+            <p style="color:var(--text-secondary); margin-bottom:2rem; font-size:0.82rem;">¿Estás seguro de eliminar <strong id="delete-device-id" style="color:var(--danger);"></strong> del sistema? Esta acción no se puede deshacer.</p>
+            <div style="display:flex; gap:8px;">
+                <button onclick="closeDeleteModal()" class="btn-unifi" style="flex:1; background:var(--input-bg); color:var(--text-primary);">CANCELAR</button>
+                <button id="confirm-delete-btn" class="btn-unifi" style="flex:1; background:var(--danger);">ELIMINAR</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: EDITAR EMPRESA -->
+    <div id="edit-client-modal" class="modal-overlay hidden">
+        <div class="modal-unifi" style="max-width:520px;">
+            <div class="modal-header">
+                <h2 style="font-weight:900; font-size:1rem; color:var(--unifi-blue); display:flex; align-items:center; gap:8px;"><i data-lucide="building-2" style="width:18px;height:18px;"></i> Editar Empresa</h2>
+                <button class="modal-close" onclick="closeEditClientModal()"><i data-lucide="x" style="width:18px;height:18px;"></i></button>
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:0 12px;">
+                <div style="grid-column:1/-1;"><label class="label">Razón Social</label><input type="text" id="edit-client-name" class="unifi-input" placeholder="Nombre"></div>
+                <div><label class="label">Contacto</label><input type="text" id="edit-client-contact" class="unifi-input" placeholder="Juan Pérez"></div>
+                <div><label class="label">Teléfono</label><input type="text" id="edit-client-phone" class="unifi-input" placeholder="+598 99 123 456"></div>
+                <div style="grid-column:1/-1;"><label class="label">Email</label><input type="email" id="edit-client-email" class="unifi-input" placeholder="contacto@empresa.com"></div>
+                <div style="grid-column:1/-1;"><label class="label">Dirección</label><input type="text" id="edit-client-address" class="unifi-input" placeholder="Av. Italia 1234, Montevideo"></div>
+                <div><label class="label">Latitud</label><input type="number" step="any" id="edit-client-lat" class="unifi-input" placeholder="-34.9"></div>
+                <div><label class="label">Longitud</label><input type="number" step="any" id="edit-client-lng" class="unifi-input" placeholder="-56.1"></div>
+            </div>
+            <div style="border-top:1px solid var(--border-light); margin:1rem 0; padding-top:1rem;">
+                <h4 style="font-size:0.65rem; color:var(--unifi-blue); font-weight:900; text-transform:uppercase; margin-bottom:1rem; letter-spacing:1px;">Gestión de Suscripción</h4>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                    <div><label class="label">Plan</label>
+                        <select id="edit-client-plan" class="unifi-input">
+                            <option value="free">FREE (LITE)</option>
+                            <option value="standard">STANDARD</option>
+                            <option value="premium">PREMIUM ULTRA</option>
+                        </select>
+                    </div>
+                    <div><label class="label">Estado</label>
+                        <select id="edit-client-status" class="unifi-input">
+                            <option value="active">ACTIVA</option>
+                            <option value="suspended">SUSPENDIDA</option>
+                            <option value="trial">PRUEBA</option>
+                        </select>
+                    </div>
+                    <div><label class="label">Fin Suscripción</label><input type="date" id="edit-client-sub-end" class="unifi-input"></div>
+                    <div><label class="label">Límite Equipos</label><input type="number" id="edit-client-max-dev" class="unifi-input" value="10"></div>
+                </div>
+            </div>
+            <div style="display:flex; gap:8px; margin-top:0.5rem;">
+                <button id="save-client-btn" class="btn-unifi" style="flex:1;">GUARDAR CAMBIOS</button>
+                <button onclick="closeEditClientModal()" class="btn-unifi" style="flex:0.4; background:var(--input-bg); color:var(--text-primary);">CANCELAR</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: REINICIAR DISPOSITIVO -->
+    <div id="reboot-device-modal" class="modal-overlay hidden">
+        <div class="modal-unifi" style="text-align:center; max-width:400px;">
+            <div style="width:56px;height:56px;border-radius:50%;background:rgba(255,165,0,0.1);display:flex;align-items:center;justify-content:center;margin:0 auto 1.5rem;">
+                <i data-lucide="refresh-cw" style="width:28px;height:28px;color:orange;"></i>
+            </div>
+            <h2 style="font-weight:900; margin-bottom:0.5rem;">Reiniciar Dispositivo</h2>
+            <p style="color:var(--text-secondary); margin-bottom:2rem; font-size:0.82rem;">¿Confirmas el reinicio del hardware <strong id="reboot-device-name" style="color:var(--unifi-blue);"></strong>? El equipo perderá conexión por unos segundos.</p>
+            <div style="display:flex; gap:8px;">
+                <button onclick="closeRebootModal()" class="btn-unifi" style="flex:1; background:var(--input-bg); color:var(--text-primary);">CANCELAR</button>
+                <button id="confirm-reboot-btn" class="btn-unifi" style="flex:1; background:var(--unifi-blue);">REINICIAR AHORA</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: ABRIR PUERTA -->
+    <div id="open-door-modal" class="modal-overlay hidden">
+        <div class="modal-unifi" style="text-align:center; max-width:400px;">
+            <div style="width:56px;height:56px;border-radius:50%;background:rgba(0,212,129,0.1);display:flex;align-items:center;justify-content:center;margin:0 auto 1.5rem;">
+                <i data-lucide="unlock" style="width:28px;height:28px;color:var(--success);"></i>
+            </div>
+            <h2 style="font-weight:900; margin-bottom:0.5rem;">Accionamiento de Puerta</h2>
+            <p style="color:var(--text-secondary); margin-bottom:2rem; font-size:0.82rem;">Estás por enviar un pulso de apertura al dispositivo <strong id="door-device-name" style="color:var(--success);"></strong>. ¿Deseas continuar?</p>
+            <div style="display:flex; gap:8px;">
+                <button onclick="closeOpenDoorModal()" class="btn-unifi" style="flex:1; background:var(--input-bg); color:var(--text-primary);">CANCELAR</button>
+                <button id="confirm-open-door-btn" class="btn-unifi" style="flex:1; background:var(--success);">ABRIR PUERTA</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: NUEVA VERSIÓN -->
+    <div id="firmware-modal" class="modal-overlay hidden">
+        <div class="modal-unifi">
+            <div class="modal-header">
+                <h2 style="font-weight:900; font-size:1rem; color:var(--unifi-blue);"><i data-lucide="code" style="width:18px;height:18px;vertical-align:middle;margin-right:6px;"></i> Registrar Firmware</h2>
+                <button class="modal-close" onclick="closeFirmwareModal()"><i data-lucide="x" style="width:18px;height:18px;"></i></button>
+            </div>
+            <label class="label">Versión tag (ej: v1.0.4)</label>
+            <input type="text" id="fw-version" class="unifi-input" placeholder="v1.0.0">
+            <label class="label">Binario URL (ej: updates.coldsense.uy/v1.bin)</label>
+            <input type="text" id="fw-filename" class="unifi-input" placeholder="https://...">
+            <label class="label">Changelog / Notas de versión</label>
+            <textarea id="fw-changelog" class="unifi-input" style="height:100px; padding:12px;" placeholder="- Mejorada estabilidad WiFi\n- Lectura Temp corregida"></textarea>
+            <button onclick="saveFirmware()" class="btn-unifi" style="margin-top:1rem;">REGISTRAR VERSIÓN</button>
+        </div>
+    </div>
+
+    <script src="/admin.js"></script>
+</body>
+</html>
