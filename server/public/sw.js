@@ -8,11 +8,32 @@ const ASSETS = [
 ];
 
 self.addEventListener('install', (e) => {
+    self.skipWaiting();
     e.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS)));
 });
 
+self.addEventListener('activate', (e) => {
+    e.waitUntil(clients.claim());
+});
+
 self.addEventListener('fetch', (e) => {
-    e.respondWith(caches.match(e.request).then(res => res || fetch(e.request)));
+    // DO NOT cache API calls or Socket.IO
+    if (e.request.url.includes('/api/') || e.request.url.includes('socket.io')) {
+        return e.respondWith(fetch(e.request).catch(() => {
+            return new Response(JSON.stringify({ error: 'Offline - No connection to SaaS Core' }), {
+                headers: { 'Content-Type': 'application/json' }
+            });
+        }));
+    }
+
+    e.respondWith(
+        caches.match(e.request).then(response => {
+            return response || fetch(e.request).catch(err => {
+                console.warn('📡 [PWA] Offline: Request failed:', e.request.url);
+                return caches.match('/pwa'); // Fallback to main page if offline
+            });
+        })
+    );
 });
 
 // PUSH NOTIFICATIONS

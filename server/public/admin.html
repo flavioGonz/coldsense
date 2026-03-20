@@ -15,8 +15,44 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <script src="/socket.io/socket.io.js"></script>
+    <style>
+        /* OTA Progress Styles */
+        .ota-spinner-ring {
+            width: 80px; height: 80px; margin: 0 auto;
+            border: 4px solid var(--border-light);
+            border-top: 4px solid var(--warning);
+            border-radius: 50%;
+            animation: ota-spin 1s cubic-bezier(0.5, 0, 0.5, 1) infinite;
+        }
+        @keyframes ota-spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        #global-ota-bubble {
+            position: fixed; bottom: 20px; right: 20px;
+            background: var(--bg-card);
+            border: 1px solid var(--border-light);
+            border-radius: 50px;
+            padding: 8px 16px;
+            display: flex; align-items: center; gap: 12px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+            z-index: 9999;
+            animation: ota-bubble-in 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        @keyframes ota-bubble-in { from { transform: translateY(100px) scale(0.8); opacity: 0; } to { transform: translateY(0) scale(1); opacity: 1; } }
+
+        .ota-bubble-ring {
+            width: 14px; height: 14px; border: 2px solid var(--warning);
+            border-top: 2px solid transparent; border-radius: 50%;
+            animation: ota-spin 0.6s linear infinite;
+        }
+
+        .ota-bubble-content { display: flex; align-items: center; gap: 8px; font-size: 0.7rem; font-weight: 900; color: var(--text-primary); }
+        .ota-bubble-content button { background: none; border: none; color: var(--unifi-blue); cursor: pointer; display: flex; align-items: center; opacity: 0.6; }
+        .ota-bubble-content button:hover { opacity: 1; }
+    </style>
 </head>
 <body>
+    
+    <div id="sonner-container" class="sonner-container"></div>
     
     <aside class="sidebar" id="main-sidebar">
         <div class="sidebar-logo">
@@ -27,8 +63,8 @@
             <button class="nav-btn active" data-view="dashboard" data-tippy-content="Resumen del Sistema">
                 <i data-lucide="layout-dashboard" style="width:20px;height:20px;"></i><span>Dashboard</span>
             </button>
-            <button class="nav-btn" data-view="devices" data-tippy-content="Hardware ESP32">
-                <i data-lucide="hard-drive" style="width:20px;height:20px;"></i><span>Equipos</span>
+            <button class="nav-btn" data-view="devices" data-tippy-content="Plataforma de Hardware ESP32">
+                <i data-lucide="hard-drive" style="width:20px;height:20px;"></i><span>Dispositivos</span>
             </button>
             <button class="nav-btn" data-view="clients" data-tippy-content="Empresas Clientes">
                 <i data-lucide="building-2" style="width:20px;height:20px;"></i><span>Empresas SaaS</span>
@@ -39,6 +75,9 @@
             <div class="nav-divider"></div>
             <button class="nav-btn" data-view="events" data-tippy-content="Tráfico MQTT">
                 <i data-lucide="activity" style="width:20px;height:20px;"></i><span>Eventos</span>
+            </button>
+            <button class="nav-btn" data-view="commands" data-tippy-content="Gestión de comandos ejecutados">
+                <i data-lucide="send" style="width:20px;height:20px;"></i><span>Comandos</span>
             </button>
             <button class="nav-btn" data-view="map" data-tippy-content="Geolocalización">
                 <i data-lucide="map-pin" style="width:20px;height:20px;"></i><span>Mapa</span>
@@ -72,6 +111,7 @@
                 <div class="pill" style="color:var(--success); background:rgba(0,212,129,0.08); border:1px solid rgba(0,212,129,0.12);">
                     <span class="status-orb online"></span> MQTT Activo
                 </div>
+                <div id="user-name" style="font-size:0.65rem; font-weight:900; opacity:0.6; text-transform:uppercase; letter-spacing:0.5px;">IDENTIFICANDO...</div>
                 <div class="theme-toggle" onclick="toggleTheme()"></div>
             </div>
         </header>
@@ -89,7 +129,7 @@
         <section id="view-devices" class="view-module hidden">
             <div class="enterprise-table-wrapper">
                 <div class="table-header">
-                    <h3 style="font-size:0.72rem; font-weight:900; display:flex; align-items:center; gap:8px;"><i data-lucide="hard-drive" style="width:15px;height:15px;color:var(--unifi-blue);"></i> EQUIPOS GESTIONADOS</h3>
+                    <h3 style="font-size:0.72rem; font-weight:900; display:flex; align-items:center; gap:8px;"><i data-lucide="hard-drive" style="width:15px;height:15px;color:var(--unifi-blue);"></i> DISPOSITIVOS</h3>
                     <div style="display:flex; gap:8px; align-items:center;">
                         <input type="text" id="search-devices" class="unifi-input" style="width:220px; margin:0;" placeholder="Buscar...">
                         <button onclick="fetchDevices()" class="btn-sm btn-ghost"><i data-lucide="refresh-cw" style="width:13px;height:13px;"></i></button>
@@ -98,14 +138,14 @@
                 <div style="overflow-x:auto;">
                     <table>
                         <thead><tr>
-                            <th data-tippy-content="Dirección MAC"><i data-lucide="cpu" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> ID</th>
-                            <th data-tippy-content="IP Local / MAC"><i data-lucide="network" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> Red (IP/MAC)</th>
-                            <th data-tippy-content="Nombre asignado"><i data-lucide="tag" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> Nombre</th>
-                            <th data-tippy-content="Sensores térmicos (<In> / <Out>)"><i data-lucide="thermometer" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> Temps (IN/OUT)</th>
-                            <th data-tippy-content="Estado de puerta"><i data-lucide="door-open" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> Puerta</th>
-                            <th data-tippy-content="Tiempo de actividad"><i data-lucide="clock" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> Uptime</th>
-                            <th data-tippy-content="Cliente / Firmware"><i data-lucide="building-2" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> Cliente / FW / RSSI</th>
-                            <th>Acciones</th>
+                            <th data-tippy-content="Dirección MAC"><i data-lucide="cpu" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> ID/HW</th>
+                            <th><i data-lucide="building-2" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> CLIENTE</th>
+                            <th data-tippy-content="IP Local / MAC"><i data-lucide="network" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> RED (IP/MAC)</th>
+                            <th data-tippy-content="Nombre asignado"><i data-lucide="tag" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> DESCRIPCIÓN</th>
+                            <th data-tippy-content="Sensores térmicos (<In> / <Out>)"><i data-lucide="thermometer" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> TEMPS</th>
+                            <th data-tippy-content="Estado de puerta"><i data-lucide="door-open" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> PUERTA</th>
+                            <th data-tippy-content="Tiempo de actividad"><i data-lucide="clock" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> UPTIME</th>
+                            <th style="text-align:right;">ACCIONES</th>
                         </tr></thead>
                         <tbody id="sensors-list-body"></tbody>
                     </table>
@@ -126,10 +166,10 @@
                 <table>
                     <thead><tr>
                         <th><i data-lucide="building-2" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> Empresa</th>
-                        <th data-tippy-content="Equipos vinculados"><i data-lucide="hard-drive" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> Flota</th>
-                        <th><i data-lucide="signal" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> Estado</th>
+                        <th data-tippy-content="Total de equipos vinculados"><i data-lucide="hard-drive" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> DISPOSITIVOS</th>
+                        <th><i data-lucide="signal" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> ESTADO</th>
                         <th>ID</th>
-                        <th>Acciones</th>
+                        <th style="text-align:right;">ACCIONES</th>
                     </tr></thead>
                     <tbody id="clients-list-container"></tbody>
                 </table>
@@ -155,7 +195,8 @@
                 </table>
             </div>
         </section>
-
+        <!-- EVENTOS -->
+        <section id="view-events" class="view-module hidden">
             <div class="enterprise-table-wrapper">
                 <div class="table-header">
                     <h3 style="font-size:0.72rem; font-weight:900; display:flex; align-items:center; gap:8px;"><i data-lucide="activity" style="width:15px;height:15px;color:var(--unifi-blue);"></i> FLUJO DE RED</h3>
@@ -167,14 +208,34 @@
                 <div style="max-height:calc(100vh - 200px); overflow:auto;">
                     <table>
                         <thead><tr>
-                            <th><i data-lucide="radio" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> Origen</th>
-                            <th><i data-lucide="hash" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> Tópico</th>
-                            <th>Estado</th>
-                            <th><i data-lucide="clock" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> Hora</th>
+                            <th style="width:180px;"><i data-lucide="radio" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> Origen</th>
+                            <th>TIPO / TÓPICO</th>
+                            <th style="width:120px;">ACCIÓN</th>
+                            <th style="text-align:right;"><i data-lucide="clock" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> Hora</th>
                         </tr></thead>
                         <tbody id="events-log"></tbody>
                     </table>
                 </div>
+            </div>
+        </section>
+
+        <!-- COMANDOS (Admin View) -->
+        <section id="view-commands" class="view-module hidden">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.5rem;">
+                <h3 style="font-size:0.75rem; font-weight:900;"><i data-lucide="send" style="width:14px;height:14px;vertical-align:middle;margin-right:6px;"></i> HISTORIAL DE COMANDOS GLOBAL</h3>
+            </div>
+            <div class="enterprise-table-wrapper">
+                <table>
+                    <thead><tr>
+                        <th>FECHA/HORA</th>
+                        <th>COMANDO</th>
+                        <th>DISPOSITIVO</th>
+                        <th>EMPRESA</th>
+                        <th>USUARIO</th>
+                        <th>ESTADO</th>
+                    </tr></thead>
+                    <tbody id="admin-commands-body"></tbody>
+                </table>
             </div>
         </section>
 
@@ -330,7 +391,29 @@
             <p style="color:var(--text-secondary); margin-bottom:2rem; font-size:0.82rem;">¿Confirmas el reinicio del hardware <strong id="reboot-device-name" style="color:var(--unifi-blue);"></strong>? El equipo perderá conexión por unos segundos.</p>
             <div style="display:flex; gap:8px;">
                 <button onclick="closeRebootModal()" class="btn-unifi" style="flex:1; background:var(--input-bg); color:var(--text-primary);">CANCELAR</button>
-                <button id="confirm-reboot-btn" class="btn-unifi" style="flex:1; background:var(--unifi-blue);">REINICIAR AHORA</button>
+        <button id="confirm-reboot-btn" class="btn-unifi" style="flex:1; background:var(--unifi-blue);">REINICIAR AHORA</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: CREDENCIALES WEB -->
+    <div id="credentials-modal" class="modal-overlay hidden">
+        <div class="modal-unifi" style="max-width:400px;">
+            <div class="modal-header">
+                <h2 style="font-weight:900; font-size:1rem; color:var(--text-primary);"><i data-lucide="lock" style="width:18px;height:18px;vertical-align:middle;margin-right:6px;"></i> Credenciales Web</h2>
+                <button class="modal-close" onclick="closeCredentialsModal()"><i data-lucide="x" style="width:18px;height:18px;"></i></button>
+            </div>
+            <p style="font-size:0.75rem; margin:1rem 0; opacity:0.6;">Gestione el acceso al portal para <strong id="cred-client-name" style="color:var(--unifi-blue);"></strong>.</p>
+            
+            <div style="display:flex; flex-direction:column; gap:12px; margin-bottom:1.5rem;">
+                <div><label class="label">Usuario (Username)</label><input type="text" id="cred-username" class="unifi-input" placeholder="usuario_empresa"></div>
+                <div><label class="label">Nueva Contraseña</label><input type="password" id="cred-password" class="unifi-input" placeholder="••••••••"></div>
+                <p style="font-size:0.55rem; color:var(--warning); opacity:0.8; line-height:1.4;">* Deje en blanco la contraseña si solo desea cambiar el nombre de usuario.</p>
+            </div>
+
+            <div style="display:flex; gap:8px;">
+                <button onclick="saveCredentials()" class="btn-unifi" style="flex:1; background:var(--unifi-blue);">GUARDAR CAMBIOS</button>
+                <button onclick="closeCredentialsModal()" class="btn-unifi" style="flex:0.5; background:var(--input-bg); color:var(--text-primary);">CANCELAR</button>
             </div>
         </div>
     </div>
@@ -357,16 +440,62 @@
                 <h2 style="font-weight:900; font-size:1rem; color:var(--unifi-blue);"><i data-lucide="code" style="width:18px;height:18px;vertical-align:middle;margin-right:6px;"></i> Registrar Firmware</h2>
                 <button class="modal-close" onclick="closeFirmwareModal()"><i data-lucide="x" style="width:18px;height:18px;"></i></button>
             </div>
-            <label class="label">Versión tag (ej: v1.0.4)</label>
-            <input type="text" id="fw-version" class="unifi-input" placeholder="v1.0.0">
-            <label class="label">Binario URL (ej: updates.coldsense.uy/v1.bin)</label>
-            <input type="text" id="fw-filename" class="unifi-input" placeholder="https://...">
-            <label class="label">Changelog / Notas de versión</label>
-            <textarea id="fw-changelog" class="unifi-input" style="height:100px; padding:12px;" placeholder="- Mejorada estabilidad WiFi\n- Lectura Temp corregida"></textarea>
-            <button onclick="saveFirmware()" class="btn-unifi" style="margin-top:1rem;">REGISTRAR VERSIÓN</button>
+            <div class="modal-body">
+                <label class="label">Versión tag (ej: v1.0.4)</label>
+                <input type="text" id="fw-version" class="unifi-input" placeholder="v1.0.0">
+                
+                <label class="label">Archivo Binario Firmware (.bin)</label>
+                <input type="file" id="fw-binary" class="unifi-input" accept=".bin" style="padding: 10px; border: 2px dashed var(--border-light); background: rgba(0,0,0,0.2);">
+                
+                <label class="label">Changelog / Notas de versión (Markdown)</label>
+                <textarea id="fw-changelog" class="unifi-input" style="height:120px; padding:12px; font-family: 'JetBrains Mono', monospace; font-size: 0.72rem;" placeholder="- Mejorada estabilidad WiFi\n- Lectura Temp corregida"></textarea>
+                
+                <div style="margin-top: 2rem; display: flex; gap: 10px;">
+                    <button onclick="saveFirmware()" class="btn-unifi" style="flex:1;">SUBIR Y REGISTRAR VERSIÓN</button>
+                    <button onclick="closeFirmwareModal()" class="btn-unifi" style="flex:0.4; background:var(--input-bg); color:var(--text-primary);">CANCELAR</button>
+                </div>
+            </div>
         </div>
     </div>
 
-    <script src="/admin.js"></script>
+    <!-- MODAL: SELECCIONAR FIRMWARE (OTA) -->
+    <div id="ota-selection-modal" class="modal-overlay hidden">
+        <div class="modal-unifi" style="max-width:500px;">
+            <div id="ota-initial-view">
+                <div class="modal-header">
+                    <h2 style="font-weight:900; font-size:1rem; color:var(--warning);"><i data-lucide="zap" style="width:18px;height:18px;vertical-align:middle;margin-right:6px;"></i> Lanzar Actualización OTA</h2>
+                    <button class="modal-close" onclick="closeOtaModal()"><i data-lucide="x" style="width:18px;height:18px;"></i></button>
+                </div>
+                <p style="font-size:0.8rem; margin:1rem 0; opacity:0.6;">Seleccione la versión a desplegar en el dispositivo <strong id="ota-device-id" style="color:var(--text-primary);"></strong>.</p>
+                <div id="firmwares-selection-list" style="display:flex; flex-direction:column; gap:8px; max-height:300px; overflow:auto; margin-bottom:1.5rem;"></div>
+                <div style="display:flex; gap:8px;">
+                    <button onclick="closeOtaModal()" class="btn-unifi" style="flex:1; background:var(--input-bg); color:var(--text-primary);">CANCELAR</button>
+                </div>
+            </div>
+            
+            <div id="ota-progress-view" class="hidden" style="text-align:center; padding:2rem 0;">
+                <div class="ota-spinner-ring"></div>
+                <h3 id="ota-status-main" style="font-weight:900; margin-top:1.5rem; font-size:1.1rem;">DESPLEGANDO...</h3>
+                <p id="ota-status-sub" style="opacity:0.5; font-size:0.75rem; margin-top:0.5rem;">Iniciando túnel OTA seguro</p>
+                
+                <div style="background:var(--bg-card); border-radius:10px; padding:1rem; text-align:left; margin-top:1.5rem; font-family:'JetBrains Mono', monospace; font-size:0.65rem; color:var(--success); border:1px solid var(--border-light); max-height:100px; overflow:auto;" id="ota-log-terminal">
+                    > [00.1s] Preparando binario...
+                </div>
+                
+                <button onclick="closeOtaModal(true)" class="btn-unifi" style="width:100%; margin-top:1.5rem; background:rgba(0,102,255,0.1); color:var(--unifi-blue);">DEJAR EN SEGUNDO PLANO</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- GLOBAL PROGRESS INDICATOR (Floating) -->
+    <div id="global-ota-bubble" class="hidden">
+        <div class="ota-bubble-ring"></div>
+        <div class="ota-bubble-content">
+            <span id="ota-bubble-text">OTA 1 Activa</span>
+            <button onclick="reopenOtaProgress()"><i data-lucide="maximize-2" style="width:12px;"></i></button>
+        </div>
+    </div>
+
+    <script src="/admin.js?v=3.2.2"></script>
 </body>
 </html>

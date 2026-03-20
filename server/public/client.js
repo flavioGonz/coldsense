@@ -29,9 +29,34 @@ async function checkAuth() {
         // Show app immediately after auth
         document.getElementById('main-sidebar').classList.remove('hidden');
         document.getElementById('main-content').classList.remove('hidden');
+
+        document.querySelectorAll('.nav-btn').forEach(btn => {
+            btn.onclick = () => {
+                const view = btn.dataset.view;
+                navigateTo(view, btn.querySelector('span')?.textContent || view);
+            }
+        });
+
+        document.getElementById('sidebar-toggle').onclick = () => {
+            document.body.classList.toggle('sidebar-collapsed');
+            document.getElementById('main-sidebar').classList.toggle('collapsed');
+        };
+
+        const v = new URLSearchParams(window.location.search).get('view');
+        if (v) navigateTo(v, v.toUpperCase());
         
         initSocket();
         await loadAllData();
+
+        // PWA Nav Handling (Bottom Bar)
+        document.querySelectorAll('.pwa-nav-btn').forEach(btn => {
+            btn.onclick = () => {
+                const view = btn.dataset.view;
+                document.querySelectorAll('.pwa-nav-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                navigateTo(view, view.toUpperCase());
+            }
+        });
     } catch(e) {
         console.error('🔥 Init Crash:', e);
         document.body.innerHTML = `<div style="color:white;text-align:center;padding:10%;background:#000;height:100vh;">
@@ -42,17 +67,76 @@ async function checkAuth() {
     }
 }
 
+function navigateTo(view, title) {
+    currentView = view;
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+    const activeBtn = document.querySelector(`.nav-btn[data-view="${view}"]`);
+    if (activeBtn) activeBtn.classList.add('active');
+
+    // Smooth UI Transition
+    const modules = document.querySelectorAll('.view-module');
+    modules.forEach(m => {
+        m.style.opacity = '0';
+        m.style.transform = 'translateY(10px)';
+        setTimeout(() => m.classList.add('hidden'), 200);
+    });
+
+    setTimeout(() => {
+        const target = document.getElementById(`view-${view}`);
+        if (target) {
+            target.classList.remove('hidden');
+            setTimeout(() => {
+                target.style.opacity = '1';
+                target.style.transform = 'translateY(0)';
+            }, 50);
+        }
+        renderAll();
+    }, 250);
+}
+
 function initSocket() {
     socket.on('sensor-update', (data) => {
-        latestTelemetry[data.id] = data;
+        // PERSIST: Translate server-side shorthand (tIn, tOut) to UI fields
+        const mapped = {
+            ...data,
+            temp_interior: data.tIn,
+            temp_exterior: data.tOut,
+            door_open: data.door,
+            uptime: data.uptime,
+            timestamp: data.last_seen
+        };
+        
+        latestTelemetry[data.id] = mapped; 
+        
+        // Add to historical event log for the 'Events' view
+        allClientEvents.unshift({
+            id: data.id,
+            time: data.last_seen || new Date().toISOString(),
+            type: 'TELEMETRÍA',
+            rssi: data.rssi,
+            uptime_secs: data.uptime
+        });
+        if (allClientEvents.length > 50) allClientEvents.pop();
+
         if (currentView === 'dashboard') renderDashboardCards();
         if (currentView === 'devices') renderMyDevices();
+        if (currentView === 'events') renderEvents();
     });
 
     socket.on('sensor-ack', (data) => {
         const title = data.status === 'success' ? 'COMANDO EJECUTADO' : 'FALLO HARDWARE';
         sonner(`Dispositivo ${data.sensorId} confirmó ejecución.`, data.status==='success'?'success':'danger', title);
-        if (currentView === 'history') loadHistory();
+        
+        // Also log command acks as events
+        allClientEvents.unshift({
+            id: data.sensorId,
+            time: new Date().toISOString(),
+            type: 'ACK',
+            details: `Comando ${data.command} ejecutado con éxito.`
+        });
+        
+        if (currentView === 'commands') loadHistory();
+        if (currentView === 'events') renderEvents();
     });
 }
 
@@ -80,6 +164,11 @@ function renderAll() {
         vBread.textContent = "SISTEMA / COMANDOS";
         loadHistory(); 
     }
+    if(currentView==='events') {
+        vTitle.textContent = "HISTORIAL EVENTOS";
+        vBread.textContent = "SISTEMA / LOGS";
+        renderEvents(); 
+    }
     if(currentView==='branches') {
         vTitle.textContent = "UBICACIONES";
         vBread.textContent = "ADMIN / SEDES";
@@ -92,19 +181,13 @@ async function loadAllData() {
     console.log('📦 Loading data...');
     try {
         const [sRes, bRes] = await Promise.all([
-            fetch(`${API_URL}/admin/sensors`), 
+            fetch(`${API_URL}/client/sensors`), 
             fetch(`${API_URL}/client/branches`)
         ]);
         const sensors = await sRes.json();
         allBranches = await bRes.json();
         
-        const myId = currentUser.clientId;
-        console.log('👤 Client ID:', myId);
-        
-        allMySensors = sensors.filter(s => {
-            if (!myId) return currentUser.role === 'admin';
-            return parseInt(s.client_id) === parseInt(myId);
-        });
+        allMySensors = sensors; // Already filtered by server
         
         console.log('📶 Sensors found:', allMySensors.length);
         renderAll();
@@ -118,13 +201,34 @@ async function loadHistory() {
     const list = document.getElementById('history-table-body'); if(!list) return;
     const r = await fetch(`${API_URL}/client/commands`);
     const logs = await r.json();
-    list.innerHTML = logs.map(l => `
+    list.innerHTML = logs.map(l => {
+        const isOk = l.status === 'success';
+        return `
         <tr>
             <td style="font-size:0.6rem; opacity:0.6;">${new Date(l.timestamp).toLocaleString()}</td>
-            <td><div style="font-weight:900; font-size:0.75rem; color:var(--unifi-blue);">${l.command.toUpperCase()}</div></td>
+            <td><div style="font-weight:900; font-size:0.75rem; color:var(--unifi-blue);">${(l.command||'').toUpperCase()}</div></td>
             <td><span class="label">${l.sensor_id}</span></td>
-            <td><span class="history-status ${l.status}">${l.status}</span></td>
+            <td>
+                <span style="display:inline-flex; align-items:center; gap:6px; font-size:0.65rem; font-weight:800; color:${isOk ? 'var(--success)' : 'var(--warning)'};">
+                    <span class="status-orb" style="background:${isOk ? 'var(--success)' : 'var(--warning)'}"></span>
+                    ${isOk ? 'Recibido ok' : 'Enviado'}
+                </span>
+            </td>
             <td><div style="font-family:monospace; font-size:0.6rem; letter-spacing:1px; opacity:0.4;">${l.cmd_id}</div></td>
+        </tr>
+    `}).join('');
+    lucide.createIcons();
+}
+
+let allClientEvents = [];
+function renderEvents() {
+    const list = document.getElementById('events-table-body'); if(!list) return;
+    list.innerHTML = allClientEvents.map(e => `
+        <tr>
+            <td style="font-size:0.65rem; opacity:0.5;">${new Date(e.time||e.timestamp).toLocaleTimeString()}</td>
+            <td><span class="label">${e.id || e.device_id}</span></td>
+            <td><span class="pill" style="background:rgba(0,102,255,0.05); color:var(--unifi-blue);">${(e.type||'heartbeat').toUpperCase()}</span></td>
+            <td style="font-size:0.7rem;">RSSI: ${e.rssi || '--'} dBm | Up: ${formatUptime(e.uptime_secs)}</td>
         </tr>
     `).join('');
     lucide.createIcons();
@@ -153,20 +257,26 @@ function renderDashboardCards() {
         lucide.createIcons(); return;
     }
     grid.innerHTML = allMySensors.map(s => {
-        const tel = latestTelemetry[s.id]||{};
-        const tIn = tel.temp_interior !== undefined ? tel.temp_interior : (tel.t_in || s.temp_interior);
-        const tOut = tel.temp_exterior !== undefined ? tel.temp_exterior : (tel.t_out || s.temp_exterior);
-        const door = tel.door_open !== undefined ? tel.door_open : (tel.p !== undefined ? tel.p : s.door_open);
+        const tel = latestTelemetry[s.id] || {};
+        const tIn = tel.temp_interior !== undefined ? tel.temp_interior : s.temp_interior;
+        const tOut = tel.temp_exterior !== undefined ? tel.temp_exterior : s.temp_exterior;
+        const door = tel.door_open !== undefined ? tel.door_open : s.door_open;
         
+        const lastSeen = tel.timestamp ? new Date(tel.timestamp).getTime() : 0;
+        const isOnline = Date.now() - lastSeen < 60000; // 1 min threshold
+
         const tMin = s.temp_min !== null ? s.temp_min : -20;
         const tMax = s.temp_max !== null ? s.temp_max : 10;
         
         let statusColor = 'var(--bg-card)';
         let borderHighlight = 'var(--border-light)';
-        let statusText = 'NORMAL';
+        let statusText = isOnline ? 'NORMAL' : 'DISPOSITIVO OFFLINE';
         let glow = '';
 
-        if (tIn !== undefined) {
+        if (!isOnline) {
+            statusColor = 'rgba(255, 255, 255, 0.02)';
+            borderHighlight = 'rgba(255, 255, 255, 0.1)';
+        } else if (tIn !== undefined) {
             if (tIn > tMax || tIn < tMin) {
                 statusColor = 'rgba(255, 77, 77, 0.08)';
                 borderHighlight = 'var(--danger)';
@@ -190,11 +300,12 @@ function renderDashboardCards() {
             ${tIn !== undefined ? `<div style="position:absolute; top:8px; right:12px; font-size:0.55rem; font-weight:900; color:${borderHighlight}; letter-spacing:1px;">${statusText}</div>` : ''}
             <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:1.5rem;">
                 <div style="display:flex; gap:12px; align-items:center;">
-                    <div style="width:40px; height:40px; background:var(--input-bg); border-radius:10px; display:flex; align-items:center; justify-content:center;">
+                    <div style="width:40px; height:40px; background:var(--input-bg); border-radius:10px; display:flex; align-items:center; justify-content:center; position:relative;">
                         <i data-lucide="thermometer" style="width:20px; height:20px; color:var(--unifi-blue);"></i>
+                        ${isOnline ? `<span style="position:absolute; bottom:-2px; right:-2px; width:12px; height:12px; border-radius:50%; background:var(--success); border:2px solid var(--bg-card); box-shadow:0 0 10px var(--success); animation: pulse 2s infinite;"></span>` : ''}
                     </div>
                     <div>
-                        <h4 style="font-weight:800; font-size:0.9rem;">${s.name || s.id}</h4>
+                        <h4 style="font-weight:800; font-size:0.9rem;">${s.name || s.id} ${!isOnline ? '<span style="color:var(--danger); font-size:0.5rem;">OFFLINE</span>' : ''}</h4>
                         <p style="font-size:0.6rem; opacity:0.5; font-family:monospace;">${s.id}</p>
                     </div>
                 </div>
@@ -366,7 +477,12 @@ async function openGraphModal(id, name) {
     document.getElementById('graph-modal').classList.remove('hidden');
     
     const r = await fetch(`${API_URL}/client/telemetry/${id}`);
-    const data = await r.json();
+    const data = await r.json() || [];
+
+    if (!data.length) {
+        sonner('Sin datos históricos para este sensor', 'info');
+        // If no data, we can still show an empty chart or just return
+    }
     
     const labels = data.map(d => new Date(d.time || d.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })).reverse();
     const tempsIn = data.map(d => d.temp_interior).reverse();
@@ -416,5 +532,34 @@ async function openGraphModal(id, name) {
     });
 }
 function closeGraphModal() { document.getElementById('graph-modal').classList.add('hidden'); }
+
+async function requestNativePermissions() {
+    try {
+        console.log('🛰️ Solicitando permisos nativos...');
+        // 1. GPS
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(() => console.log('📍 GPS OK'), (err) => console.warn('📍 GPS Denied', err));
+        }
+        // 2. Camera & Mic
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+        stream.getTracks().forEach(track => track.stop()); // Just to trigger prompt
+        sonner('Permisos nativos concedidos', 'success', 'SISTEMA PWA');
+    } catch(e) {
+        console.error('🚫 Permisos fallidos:', e);
+        sonner('Permisos denegados', 'danger', 'ERROR PWA');
+    }
+}
+
+// Check for PWA mode to suggest permissions
+if (window.matchMedia('(display-mode: standalone)').matches || window.innerWidth < 768) {
+    setTimeout(() => {
+        if (!localStorage.getItem('cs-permissions-asked')) {
+            if(confirm('¿Deseas activar funciones nativas (GPS, Cámara, Mic) para mejorar la experiencia?')) {
+                requestNativePermissions();
+                localStorage.setItem('cs-permissions-asked', 'true');
+            }
+        }
+    }, 3000);
+}
 
 window.onload = checkAuth;

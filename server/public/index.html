@@ -43,6 +43,9 @@
             <button class="nav-btn" data-view="commands" data-tippy-content="Gestión de comandos ejecutados">
                 <i data-lucide="send" style="width:20px;height:20px;"></i><span>Comandos</span>
             </button>
+            <button class="nav-btn" data-view="events" data-tippy-content="Monitoreo de latidos de hardware">
+                <i data-lucide="activity" style="width:20px;height:20px;"></i><span>Eventos</span>
+            </button>
             <button class="nav-btn" data-view="branches" data-tippy-content="Mapa de sucursales">
                 <i data-lucide="map-pin" style="width:20px;height:20px;"></i><span>Ubicaciones</span>
             </button>
@@ -131,6 +134,26 @@
             </div>
         </section>
 
+        <!-- EVENTOS -->
+        <section id="view-events" class="view-module hidden">
+            <div class="enterprise-table-wrapper">
+                <div class="table-header">
+                    <h3 style="font-size:0.75rem; font-weight:900; letter-spacing:1px;"><i data-lucide="activity" style="width:14px;height:14px;vertical-align:middle;margin-right:6px;"></i> EVENTOS DE HARDWARE</h3>
+                </div>
+                <div style="overflow-x:auto;">
+                    <table>
+                        <thead><tr>
+                            <th>HORA</th>
+                            <th>SENSOR</th>
+                            <th>TIPO</th>
+                            <th>DETALLES</th>
+                        </tr></thead>
+                        <tbody id="events-table-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
         <!-- SUCURSALES -->
         <section id="view-branches" class="view-module hidden">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.5rem;">
@@ -140,6 +163,28 @@
             <div id="branches-list" class="metrics-grid"></div>
         </section>
     </main>
+
+
+    <!-- NAVEGACIÓN PWA (Mobile Only) -->
+    <nav class="pwa-bottom-bar" id="pwa-nav">
+        <button class="pwa-nav-btn active" data-view="dashboard">
+            <i data-lucide="layout-grid"></i>
+            <span>Dash</span>
+        </button>
+        <button class="pwa-nav-btn" data-view="devices">
+            <i data-lucide="hard-drive"></i>
+            <span>Equipos</span>
+        </button>
+        <button class="pwa-nav-btn" data-view="events">
+            <i data-lucide="activity"></i>
+            <span>Eventos</span>
+        </button>
+        <button class="pwa-nav-btn" data-view="commands">
+            <i data-lucide="send"></i>
+            <span>Cmds</span>
+        </button>
+    </nav>
+
 
     <!-- MODAL: GRÁFICA -->
     <div id="graph-modal" class="modal-overlay hidden">
@@ -163,7 +208,21 @@
     <script src="client.js"></script>
     <script>
         if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('/sw.js');
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js').then(reg => {
+                    // Force update check on each open
+                    reg.update();
+                }).catch(err => console.error('PWA SW Fail:', err));
+            });
+
+            // Reload page if a new SW is activated
+            let refreshing = false;
+            navigator.serviceWorker.oncontrollerchange = () => {
+                if (!refreshing) {
+                    window.location.reload();
+                    refreshing = true;
+                }
+            };
         }
     </script>
 </body>

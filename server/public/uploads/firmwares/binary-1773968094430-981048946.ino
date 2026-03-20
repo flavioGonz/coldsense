@@ -12,10 +12,6 @@
 #include <Preferences.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
-#include <HTTPClient.h>
-#include <HTTPUpdate.h>
-
-#define t_httpUpdate httpUpdate
 
 // --- Hardware Hardware Config ---
 const int PIN_ONEWIRE = 4;   // DS18B20 Temp
@@ -153,41 +149,11 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     if (cmd == "reboot") { delay(500); ESP.restart(); }
     if (cmd == "reset") { nvs.clear(); ESP.restart(); }
     if (cmd == "ack_alarm") { digitalWrite(PIN_BUZZER, LOW); digitalWrite(PIN_LED_ERR, LOW); }
-    if (cmd == "ota_update") {
-        String url = doc["url"].as<String>();
-        Serial.println("🌐 Iniciando OTA desde: " + url);
-        handleOTA(url);
+    if (cmd == "open_door") { 
+        // Lógica de apertura GPIO física aquí
+        Serial.println("🚪 Puerta abierta vía comando.");
     }
   }
-}
-
-void handleOTA(String url) {
-    WiFiClient otaClient;
-    // t_httpUpdate.setLedPin(PIN_LED_OK, LOW); // Flash LED during update if possible
-    t_httpUpdate.onProgress([](int cur, int total) {
-        static int lastP = -1;
-        int p = (cur * 100) / total;
-        if(p % 10 == 0 && p != lastP) {
-            Serial.printf("📦 OTA Progress: %d%%\n", p);
-            lastP = p;
-        }
-    });
-
-    HTTPUpdateResult ret = t_httpUpdate.update(otaClient, url);
-
-    switch (ret) {
-        case HTTP_UPDATE_FAILED:
-            Serial.printf("❌ OTA Failed (%d): %s\n", t_httpUpdate.getLastError(), t_httpUpdate.getLastErrorString().c_str());
-            break;
-        case HTTP_UPDATE_NO_UPDATES:
-            Serial.println("❌ OTA: No hay actualizaciones.");
-            break;
-        case HTTP_UPDATE_OK:
-            Serial.println("✅ OTA Success! Reiniciando...");
-            delay(1000);
-            ESP.restart();
-            break;
-    }
 }
 
 

@@ -6,22 +6,25 @@
 
 ## 🚀 Core Features
 
-### 📡 Smart Hardware (Pulsar ESP32-C6)
-- **Real-time Telemetry**: Monitoring of interior/exterior temperatures via DS18B20 sensors.
-- **Door Security**: Detection of open/closed states with instant alerting.
-- **OTA Updates**: Remote firmware management directly from the Admin console.
-- **Local Control**: Execution of GPIO commands (reboot, door unlock) via MQTT.
+### 📡 Smart Hardware (Unified Protocol v3.4)
+- **Mauri-Unified Protocol**: High-performance JSON telemetry with consistent data mapping.
+- **Real-time Telemetry**: Monitoring of interior/exterior temperatures (`tIn` / `tOut`).
+- **Door Security**: Detection of open/closed states with MQTT event mapping.
+- **Secure OTA Updates**: Remote firmware management via LAN-aware tunnels (binary .bin only).
+- **Local Control**: Execution of GPIO commands (reboot, door unlock) with ACK confirmation.
 
 ### 🏢 Enterprise Portal (Client)
 - **Dynamic Dashboard**: High-fidelity cards with real-time status highlights (Normal, Warning, Critical).
+- **Auto-Update PWA**: Instant-update strategy (skipWaiting) ensuring the latest version on each load.
 - **Analytical Graphing**: High-resolution temperature history powered by Chart.js.
 - **Multi-branch Management**: Organize hardware by physical locations.
-- **PWA Experience**: Fully installable on iOS/Android with push notification support.
 - **Command Log**: Audit trail of every hardware interaction and its success state.
 
 ### 🛡️ Administrative Console
 - **SaaS Provisioning**: Manage client companies, subscriptions, and device limits.
-- **Fleet Control**: Global view of all connected sensors, IP/MAC tracking, and signal strength (RSSI).
+- **Credential Management**: Professional lock-driven UI for handling entreprise-level auth (User/Pass).
+- **Fleet Control**: Global view of all connected sensors with `CS-` prefixed ID support.
+- **IP/MAC Tracking**: Intelligent detection of hardware on the global SaaS network.
 - **Firmware Engine**: Repository of firmware versions with automated changelog management.
 - **Impersonation Mode**: Secure access to client dashboards for remote support.
 
@@ -30,22 +33,22 @@
 ## 🛠️ Stack & Architecture
 
 ### Backend (Node.js)
-- **Express.js**: RESTful API for portal management.
+- **Express.js**: RESTful API with secure `/api/client/sensors` isolation.
 - **Socket.io**: Real-time bi-directional events for telemetry and ACKs.
 - **MQTT (Aedes)**: Integrated broker for low-latency hardware communication.
-- **JWT & HTTP-only Cookies**: Secure session management.
+- **Bcrypt & JWT**: Industry-standard secure authentication.
 - **SQLite3**: Reliable and portable structured data storage.
 
 ### Frontend (Modern Vanilla JS)
 - **Unifi-inspired UI**: Premium dark/light themes with high contrast and smooth transitions.
+- **Service Workers**: Advanced PWA caching and background update strategy.
 - **Lucide Icons**: Crisp, vector-based iconography.
 - **Tippy.js**: Contextual tooltips for optimal UX.
-- **Chart.js**: Analytical data visualization.
 
 ### Firmware (C++/Arduino)
 - Optimized for **ESP32C6 Pulsar**.
 - **NVS Persistence**: Secure storage of adoption tokens and WiFi credentials.
-- **WiFiManager**: Zero-config initial setup via Hotspot.
+- **v3.4 Protocol Support**: Native integration with the ColdSense cloud infrastructure.
 
 ---
 
@@ -67,7 +70,12 @@
    node database.js
    ```
 
-4. **Run the Server**:
+4. **Environment Configuration**:
+   Create a `.env` file in `/server` with:
+   - `PORT=4000`
+   - `JWT_SECRET=your_secure_secret`
+
+5. **Run the Server**:
    ```bash
    npm start
    ```

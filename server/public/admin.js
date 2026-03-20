@@ -59,34 +59,63 @@ function initSocket() {
         allEvents.unshift(data);
         if (allEvents.length > 100) allEvents.pop();
         if (currentView === 'events') renderEvents();
-        if (data.topic?.includes('telemetry')) {
-            try { 
-                const payload = JSON.parse(data.message);
-                latestTelemetry[data.origin] = payload; 
-                // Update specific sensor in allSensors to persist data during view
-                const s = allSensors.find(x => x.id === data.origin);
-                if (s) { 
-                    s.rssi = payload.rssi; 
-                    s.temp_interior = payload.temp_interior !== undefined ? payload.temp_interior : payload.t_in || payload.temp; 
-                    s.temp_exterior = payload.temp_exterior !== undefined ? payload.temp_exterior : payload.t_out;
-                    s.door_open = payload.door_open !== undefined ? payload.door_open : payload.p; 
-                    s.ip = payload.ip;
-                    s.mac = payload.mac;
-                    s.uptime = payload.uptime_secs || payload.u;
-                    s.fw = payload.fw || s.fw;
-                }
-                if (currentView === 'devices') renderDevices(allSensors); 
-                if (currentView === 'dashboard') fetchStats();
-            } catch(e) {}
+    });
+
+    socket.on('sensor-update', (data) => {
+        // PERSIST: We must translate server-side shorthand (tIn, tOut) to UI-side fields (temp_interior, etc.)
+        const mapped = {
+            ...data,
+            temp_interior: data.tIn,
+            temp_exterior: data.tOut,
+            door_open: data.door,
+            uptime: data.uptime
+        };
+        
+        latestTelemetry[data.id] = mapped; 
+        
+        const s = allSensors.find(x => x.id === data.id);
+        if (s) { 
+            // Update sensor in-memory to persist even if view re-renders
+            s.rssi = data.rssi || s.rssi;
+            s.temp_interior = data.tIn !== undefined ? data.tIn : s.temp_interior;
+            s.temp_exterior = data.tOut !== undefined ? data.tOut : s.temp_exterior;
+            s.hum = data.hum !== undefined ? data.hum : s.hum;
+            s.door_open = data.door !== undefined ? data.door : s.door_open;
+            s.ip = data.ip || s.ip;
+            s.mac = data.mac || s.mac;
+            s.uptime = data.uptime || s.uptime; 
+            s.fw = data.fw || s.fw;
+            s.last_seen = data.last_seen || s.last_seen;
+
+            if (currentView === 'devices') renderDevices(allSensors); 
+            if (currentView === 'dashboard') fetchStats();
         }
     });
 
     socket.on('sensor-ack', (data) => {
         console.log('ACK:', data);
-        sonner('Comando Confirmado','success',`Dispositivo ${data.sensorId} recibió ${data.cmdId}`);
-        // Visual indicator in table if needed
         const s = allSensors.find(x => x.id === data.sensorId);
         if (s) { s.last_cmd_status = 'success'; renderDevices(allSensors); }
+
+        // Handle active OTA progress
+        if (activeOtas[data.sensorId]) {
+            const ota = activeOtas[data.sensorId];
+            ota.status = 'Éxito: Versión Aplicada';
+            ota.logs += `<br><span style="color:var(--success)">> [${new Date().toLocaleTimeString()}] HARDWARE: Confirmación recibida (ACK).</span>`;
+            ota.logs += `<br>> [${new Date().toLocaleTimeString()}] El equipo se está reiniciando...`;
+            showOtaProgress(data.sensorId);
+            
+            sonner('Actualización Exitosa', 'success', `Dispositivo ${data.sensorId} actualizado.`);
+            
+            setTimeout(() => {
+                delete activeOtas[data.sensorId];
+                updateGlobalOtaBubble();
+                fetchDevices(); // Refresh list to see new FW version
+                closeOtaModal();
+            }, 5000);
+        } else {
+            sonner('Comando Confirmado','success',`Dispositivo ${data.sensorId} recibió ${data.cmdId}`);
+        }
     });
 }
 
@@ -97,7 +126,10 @@ function initNavigation() {
         if (!view) return;
         btn.onclick = () => navigateTo(view, btn.querySelector('span')?.textContent || view);
     });
-    document.getElementById('sidebar-toggle').onclick = () => document.getElementById('main-sidebar').classList.toggle('collapsed');
+    document.getElementById('sidebar-toggle').onclick = () => {
+        document.body.classList.toggle('sidebar-collapsed');
+        document.getElementById('main-sidebar').classList.toggle('collapsed');
+    };
 }
 
 function navigateTo(view, title) {
@@ -113,8 +145,33 @@ function navigateTo(view, title) {
     if (view === 'map') { initMap(); fetchMapData(); }
     if (view === 'devices') fetchDevices();
     if (view === 'clients') fetchClients();
+    if (view === 'firmwares') renderFirmwares();
     if (view === 'events') renderEvents();
+    if (view === 'commands') fetchAdminCommands();
     lucide.createIcons(); initTippy();
+}
+
+async function fetchAdminCommands() {
+    const r = await fetch(`${API_URL}/admin/commands`);
+    const data = await r.json();
+    const tbody = document.getElementById('admin-commands-body');
+    if (!tbody) return;
+    tbody.innerHTML = data.map(c => {
+        const isOk = c.status === 'success';
+        return `<tr>
+            <td style="font-size:0.75rem; font-weight:600;">${new Date(c.timestamp).toLocaleString()}</td>
+            <td><span class="pill" style="background:rgba(0,102,255,0.1); color:var(--unifi-blue); font-weight:900;">${c.command.toUpperCase()}</span></td>
+            <td><strong>${c.sensor_name || c.sensor_id}</strong></td>
+            <td>${c.client_name || '---'}</td>
+            <td style="opacity:0.6;">${c.user_name || 'SYS'}</td>
+            <td>
+                <span style="display:inline-flex; align-items:center; gap:6px; font-size:0.65rem; font-weight:800; color:${isOk ? 'var(--success)' : 'var(--warning)'};">
+                    <span class="status-orb" style="background:${isOk ? 'var(--success)' : 'var(--warning)'}"></span>
+                    ${isOk ? 'Recibido ok' : 'Enviado'}
+                </span>
+            </td>
+        </tr>`;
+    }).join('');
 }
 
 // ── Breadcrumb ──
@@ -172,17 +229,33 @@ function renderDevices(sensors) {
         const mac = tel.mac || s.mac || '---';
         const door = tel.door_open !== undefined ? tel.door_open : s.door_open;
         
+        const latestFw = allFirmwares[0]?.version;
+        const currentFw = tel.fw || s.fw;
+        const needsUpdate = latestFw && currentFw && currentFw !== latestFw;
+
+        const isOnline = s.last_seen && (new Date() - new Date(s.last_seen)) < 30000;
+        const statusOrb = `<span class="status-orb ${isOnline?'online':'offline'}" style="width:8px; height:8px; margin-right:6px; background:${isOnline?'#00d481':'var(--danger)'}"></span>`;
+
         const client = s.client_name ? `<div style="font-weight:700;">${s.client_name}</div>` : '<span style="opacity:0.3">Sin asignar</span>';
-        const fwPill = (tel.fw || s.fw) ? `<span class="pill" style="font-size:0.55rem;background:rgba(0,102,255,0.08);color:var(--unifi-blue);">FW ${tel.fw || s.fw}</span>` : '<span style="opacity:0.3;font-size:0.65rem;">---</span>';
+        const fwPill = currentFw ? `<span class="pill" style="font-size:0.55rem;background:rgba(0,102,255,0.08);color:var(--unifi-blue);">${currentFw === latestFw ? '✅ ' : ''}FW ${currentFw}</span>` : '<span style="opacity:0.3;font-size:0.65rem;">---</span>';
         
         const sig = getWifiIcon(tel.rssi || s.rssi);
         const rssiHtml = (tel.rssi || s.rssi) ? `<div style="display:flex;align-items:center;gap:4px;color:${sig.color};font-weight:700;font-size:0.65rem;"><i data-lucide="${sig.icon}" style="width:12px;height:12px;"></i> ${tel.rssi||s.rssi}dBm</div>` : '<span style="opacity:0.2">—</span>';
-        
+
         return `<tr>
             <td><div style="display:flex;align-items:center;gap:8px;">
                 ${s.image_url ? `<img src="${s.image_url}" style="width:24px;height:24px;border-radius:4px;object-fit:cover;border:1px solid var(--border-light);">` : '<div style="width:24px;height:24px;background:var(--input-bg);border-radius:4px;display:flex;align-items:center;justify-content:center;"><i data-lucide="camera" style="width:10px;opacity:0.2;"></i></div>'}
-                <code style="color:var(--unifi-blue);font-weight:800;">${s.id}</code>
+                <div style="display:flex; align-items:center;">
+                    ${statusOrb}
+                    <code style="color:var(--unifi-blue);font-weight:800;">${s.id}</code>
+                </div>
             </div></td>
+            <td>
+                ${client}
+                <div style="display:flex; gap:6px; align-items:center; margin-top:4px;">
+                    ${fwPill} ${rssiHtml}
+                </div>
+            </td>
             <td>
                 <div style="font-size:0.75rem; font-weight:600;">${ip}</div>
                 <div style="font-size:0.6rem; opacity:0.4; font-family:monospace;">${mac}</div>
@@ -196,13 +269,8 @@ function renderDevices(sensors) {
             </td>
             <td style="font-weight:800;color:${door?'var(--danger)':'var(--success)'};">${door !== undefined ? (door ? 'ABIERTA':'CERRADA') : '--'}</td>
             <td style="font-size:0.75rem; font-weight:600;">${formatUptime(uptime)}</td>
-            <td>
-                ${client}
-                <div style="display:flex; gap:6px; align-items:center; margin-top:4px;">
-                    ${fwPill} ${rssiHtml}
-                </div>
-            </td>
-            <td><div style="display:flex;gap:4px;">
+            <td><div style="display:flex;gap:4px;justify-content:flex-end;">
+                <button class="action-btn" style="color:${needsUpdate?'var(--warning)':'var(--text-secondary)'};border-color:${needsUpdate?'var(--warning)':'var(--border-light)'};" onclick="openOtaModal('${s.id}')" data-tippy-content="Actualización OTA"><i data-lucide="zap" style="width:12px;height:12px;"></i></button>
                 <button class="action-btn" onclick="openEditModal('${s.id}',\`${(s.name||'').replace(/`/g,'')}\`,'${s.client_id||''}','${s.image_url||''}','${s.temp_min}','${s.temp_max}')" data-tippy-content="Editar"><i data-lucide="pencil" style="width:12px;height:12px;"></i></button>
                 <button class="action-btn" onclick="openRebootModal('${s.id}',\`${(s.name||'').replace(/`/g,'')}\`)" data-tippy-content="Reiniciar"><i data-lucide="refresh-cw" style="width:12px;height:12px;"></i></button>
                 <button class="action-btn" onclick="openOpenDoorModal('${s.id}',\`${(s.name||'').replace(/`/g,'')}\`)" data-tippy-content="Abrir puerta GPIO"><i data-lucide="unlock" style="width:12px;height:12px;"></i></button>
@@ -211,6 +279,83 @@ function renderDevices(sensors) {
         </tr>`;
     }).join('');
     lucide.createIcons(); initTippy();
+}
+
+let activeOtas = {};
+
+function openOtaModal(id) {
+    if (activeOtas[id]) {
+        showOtaProgress(id);
+        document.getElementById('ota-selection-modal').classList.remove('hidden');
+        return;
+    }
+
+    document.getElementById('ota-initial-view').classList.remove('hidden');
+    document.getElementById('ota-progress-view').classList.add('hidden');
+    document.getElementById('ota-device-id').textContent = id;
+    
+    const list = document.getElementById('firmwares-selection-list');
+    list.innerHTML = allFirmwares.map((f, i) => `
+        <div style="background:var(--bg-card); border:1px solid var(--border-light); border-radius:10px; padding:12px; display:flex; justify-content:space-between; align-items:center; transition:all 0.2s;">
+            <div>
+                <div style="font-weight:900; font-size:0.85rem; color:var(--text-primary); display:flex; align-items:center; gap:6px;">
+                    ${f.version} ${i===0?'<span class="pill" style="background:var(--success); color:white; font-size:0.55rem; padding:1px 6px; border-radius:4px;">LATEST</span>':''}
+                </div>
+                <div style="font-size:0.6rem; opacity:0.4; font-family:monospace; margin-top:2px;">${f.filename.split('/').pop()}</div>
+            </div>
+            <button class="btn-sm btn-unifi" style="background:var(--unifi-blue); font-size:0.65rem;" onclick="launchOta('${id}', '${f.version}')">DESPLEGAR</button>
+        </div>
+    `).join('') || '<div style="text-align:center; padding:2rem; opacity:0.4;">No hay firmwares registrados</div>';
+    
+    document.getElementById('ota-selection-modal').classList.remove('hidden');
+    lucide.createIcons();
+}
+
+function launchOta(id, version) {
+    const start = new Date().toLocaleTimeString();
+    activeOtas[id] = { id, version, status: 'Enviando comando...', startTime: Date.now(), logs: `> [${start}] Solicitando despliegue de ${version}...<br>> [${start}] Esperando respuesta del hardware...` };
+    
+    showOtaProgress(id);
+    sendAdminCommand(id, 'ota_update', version);
+    updateGlobalOtaBubble();
+}
+
+function showOtaProgress(id) {
+    const ota = activeOtas[id];
+    if (!ota) return;
+    
+    document.getElementById('ota-initial-view').classList.add('hidden');
+    const progView = document.getElementById('ota-progress-view');
+    progView.classList.remove('hidden');
+    
+    document.getElementById('ota-status-main').textContent = ota.status.toUpperCase();
+    document.getElementById('ota-log-terminal').innerHTML = ota.logs;
+    
+    // Auto-scroll terminal
+    const term = document.getElementById('ota-log-terminal');
+    term.scrollTop = term.scrollHeight;
+}
+
+function closeOtaModal(keepInBackground = false) {
+    document.getElementById('ota-selection-modal').classList.add('hidden');
+    if (keepInBackground) updateGlobalOtaBubble();
+}
+
+function updateGlobalOtaBubble() {
+    const count = Object.keys(activeOtas).length;
+    const bubble = document.getElementById('global-ota-bubble');
+    if (count > 0) {
+        bubble.classList.remove('hidden');
+        document.getElementById('ota-bubble-text').textContent = `OTA Activa (${count})`;
+    } else {
+        bubble.classList.add('hidden');
+    }
+    lucide.createIcons();
+}
+
+function reopenOtaProgress() {
+    const firstId = Object.keys(activeOtas)[0];
+    if (firstId) openOtaModal(firstId);
 }
 
 // ── Edit Modal ──
@@ -299,17 +444,62 @@ function renderClients(clients) {
         const status = statusMap[c.status] || statusMap.active;
         return `<tr>
             <td><strong>${c.name}</strong><br><span style="font-size:0.55rem; opacity:0.5; text-transform:uppercase;">Plan ${c.plan || 'Free'}</span></td>
-            <td><span class="pill" style="background:rgba(0,102,255,0.08); color:var(--unifi-blue);">${c.device_count||0} / ${c.max_devices || 10}</span></td>
+            <td><span class="pill" style="background:rgba(0,102,255,0.08); color:var(--unifi-blue);">${c.device_count || 0} / ${c.max_devices || 10}</span></td>
             <td><span class="status-orb" style="background:${status.color}"></span> <span style="font-size:0.72rem; font-weight:700;">${status.label}</span></td>
             <td><code style="opacity:0.4;">#${c.id}</code></td>
-            <td><div style="display:flex; gap:3px;">
-                <button onclick="openEditClientModal('${c.id}')" class="action-btn" data-tippy-content="Moderar Suscripción y Datos"><i data-lucide="shield-check" style="width:12px;height:12px;"></i></button>
-                <button onclick="enterClientPanel('${c.id}')" class="btn-sm btn-primary"><i data-lucide="external-link" style="width:12px;height:12px;"></i> Portal</button>
-                <button onclick="viewClientDevices('${c.id}','${c.name}')" class="btn-sm btn-ghost"><i data-lucide="package" style="width:12px;height:12px;"></i></button>
+            <td><div style="display:flex; gap:4px; justify-content:flex-end;">
+                <button onclick="openCredentialsModal('${c.id}', '${c.name}')" class="action-btn" style="color:var(--warning);" data-tippy-content="Credenciales Web"><i data-lucide="lock" style="width:12px;height:12px;"></i></button>
+                <button onclick="openEditClientModal('${c.id}')" class="action-btn" data-tippy-content="Editar Configuración"><i data-lucide="pencil" style="width:12px;height:12px;"></i></button>
+                <button onclick="enterClientPanel('${c.id}')" class="action-btn" style="color:var(--unifi-blue);" data-tippy-content="Ir al Portal"><i data-lucide="external-link" style="width:12px;height:12px;"></i></button>
+                <button onclick="viewClientDevices('${c.id}','${c.name}')" class="action-btn" data-tippy-content="Equipos Vinculados"><i data-lucide="package" style="width:12px;height:12px;"></i></button>
+                <button onclick="deleteClient('${c.id}')" class="action-btn delete" data-tippy-content="Eliminar Permanente"><i data-lucide="trash-2" style="width:12px;height:12px;"></i></button>
             </div></td>
         </tr>`;
     }).join('');
     lucide.createIcons(); initTippy();
+}
+
+// ── Credentials Modal ──
+let credClientId = null;
+async function openCredentialsModal(id, name) {
+    credClientId = id;
+    document.getElementById('cred-client-name').textContent = name;
+    document.getElementById('credentials-modal').classList.remove('hidden');
+    
+    // Fetch current username
+    try {
+        const r = await fetch(`${API_URL}/admin/clients/${id}/credentials`);
+        const data = await r.json();
+        document.getElementById('cred-username').value = data.username || '';
+        document.getElementById('cred-password').value = '';
+    } catch(e) { console.error('Error fetching credentials:', e); }
+    lucide.createIcons();
+}
+
+function closeCredentialsModal() {
+    document.getElementById('credentials-modal').classList.add('hidden');
+    credClientId = null;
+}
+
+async function saveCredentials() {
+    const username = document.getElementById('cred-username').value;
+    const password = document.getElementById('cred-password').value;
+
+    if (!username) return sonner('Nombre de usuario requerido', 'error');
+
+    const r = await fetch(`${API_URL}/admin/clients/${credClientId}/credentials`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+    });
+
+    if (r.ok) {
+        sonner('Credenciales actualizadas', 'success', 'Portal SaaS seguro');
+        closeCredentialsModal();
+    } else {
+        const err = await r.json();
+        sonner('Error', 'error', err.error || 'No se pudo actualizar');
+    }
 }
 
 function viewClientDevices(clientId, clientName) {
@@ -397,21 +587,67 @@ async function enterClientPanel(clientId) {
     if (r.ok) window.location.href = '/';
 }
 
+async function deleteClient(id) {
+    if (!confirm('¿Estás SEGURO de eliminar esta empresa? Se perderán TODOS sus dispositivos y datos asociados.')) return;
+    const r = await fetch(`${API_URL}/admin/clients/${id}`, { method:'DELETE' });
+    if (r.ok) {
+        sonner('Empresa eliminada', 'error', 'SISTEMA SAAS');
+        fetchClients();
+    }
+}
+
 // ── Events ──
 async function renderEvents() {
+    const tbody = document.getElementById('events-log'); if (!tbody) return;
     if (!allEvents.length) {
         const r = await fetch(`${API_URL}/admin/events`);
         allEvents = await r.json();
     }
     const term = (document.getElementById('search-events')?.value || '').toLowerCase();
-    const filtered = allEvents.filter(d => d.origin?.toLowerCase().includes(term) || d.topic?.toLowerCase().includes(term) || d.payload?.toLowerCase().includes(term));
-    const tbody = document.getElementById('events-log'); if (!tbody) return;
-    tbody.innerHTML = filtered.slice(0,100).map(d => `<tr>
-        <td><code style="color:var(--unifi-blue)">${d.sensor_id || d.origin}</code></td>
-        <td style="opacity:0.5; font-size:0.72rem;">${d.topic}</td>
-        <td><span class="status-orb online" style="background:#00d481"></span> STORED</td>
-        <td style="color:var(--text-secondary); font-size:0.72rem;">${new Date(d.timestamp || d.time).toLocaleString()}</td>
-    </tr>`).join('');
+    const filtered = allEvents.filter(d => 
+        (d.sensor_id||'').toLowerCase().includes(term) || 
+        (d.origin||'').toLowerCase().includes(term) || 
+        (d.topic||'').toLowerCase().includes(term)
+    );
+
+    tbody.innerHTML = filtered.slice(0,100).map(d => {
+        let badge = '<span style="background:rgba(255,255,255,0.05); color:var(--text-secondary); padding:2px 6px; border-radius:4px; font-size:0.6rem; font-weight:800;">RAW</span>';
+        let actionStr = '<span style="opacity:0.4">MESSAGE</span>';
+        
+        if (d.topic.includes('/telemetry') || d.topic.includes('coldsense/data')) {
+            badge = '<span style="background:rgba(0,212,129,0.1); color:var(--success); padding:2px 6px; border-radius:4px; font-size:0.6rem; font-weight:800;">TELEMETRÍA</span>';
+            actionStr = '<i data-lucide="database" style="width:12px;height:12px;vertical-align:middle;margin-right:4px;"></i>LECTURA';
+        } else if (d.topic.includes('/cmd') || d.topic.includes('coldsense/cmd')) {
+            badge = '<span style="background:rgba(0,102,255,0.1); color:var(--unifi-blue); padding:2px 6px; border-radius:4px; font-size:0.6rem; font-weight:800;">COMANDO</span>';
+            actionStr = '<i data-lucide="send" style="width:12px;height:12px;vertical-align:middle;margin-right:4px;"></i>ORDER';
+        } else if (d.topic.includes('coldsense/alarm')) {
+            badge = '<span style="background:rgba(239,68,68,0.1); color:var(--danger); padding:2px 6px; border-radius:4px; font-size:0.6rem; font-weight:800;">ALARMA</span>';
+            actionStr = '<i data-lucide="alert-triangle" style="width:12px;height:12px;vertical-align:middle;margin-right:4px;"></i>CRITICAL';
+        } else if (d.origin === 'CLIENT' || d.origin === 'NUBE' || d.origin === 'ADMIN') {
+            badge = '<span style="background:rgba(245,158,11,0.1); color:var(--warning); padding:2px 6px; border-radius:4px; font-size:0.6rem; font-weight:800;">SISTEMA</span>';
+            actionStr = 'LOGGED';
+        }
+
+        return `<tr>
+            <td>
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <div style="width:8px; height:8px; border-radius:50%; background:${d.origin==='ADMIN'?'var(--unifi-blue)':'#00d481'}"></div>
+                    <code style="color:var(--text-primary); font-weight:700;">${d.sensor_id || d.origin}</code>
+                </div>
+            </td>
+            <td>
+                <div style="display:flex; flex-direction:column; gap:2px;">
+                    <div style="display:flex; gap:6px; align-items:center;">
+                        ${badge}
+                        <span style="opacity:0.4; font-size:0.65rem; font-family:'JetBrains Mono';">${d.topic}</span>
+                    </div>
+                </div>
+            </td>
+            <td style="font-size:0.65rem; font-weight:900;">${actionStr}</td>
+            <td style="text-align:right; color:var(--text-secondary); font-size:0.7rem; font-weight:600;">${new Date(d.timestamp || d.time).toLocaleString()}</td>
+        </tr>`;
+    }).join('');
+    lucide.createIcons();
 }
 
 // ── Map ──
@@ -503,20 +739,33 @@ function flyToSensor(id, lat, lng) {
     setTimeout(() => markers['sensor-'+id]?.openPopup(), 1600);
 }
 
-// ── Utils ──
 async function checkAdminAuth() { 
+    console.log('🛡️ [DEBUG] Iniciando verificación de seguridad...');
     try {
         const r = await fetch(`${API_URL}/auth/me`); 
+        if (!r.ok) throw new Error('Network error');
+        
         const u = await r.json(); 
+        console.log('🕵️ [DEBUG] Identidad detectada:', u);
+
         if (!u || u.role !== 'admin') {
-            window.location.href = '/admin-login.html'; 
+            console.warn('⚠️ [SECURITY] No eres admin o no hay sesión. Redireccionando...');
+            window.location.href = '/admin-login'; 
             return;
         }
-        document.getElementById('user-name').textContent = 'ADMIN FLOW';
+        
+        // UI Updates (optional, shouldn't break auth)
+        const userEl = document.getElementById('user-name');
+        if (userEl) userEl.textContent = u.username.toUpperCase();
+        
         await loadAllData();
     } catch(e) {
-        console.error('🛡️ Auth Error:', e);
-        window.location.href = '/admin-login.html'; 
+        console.error('🛡️ [CRITICAL] Error en el túnel de autenticación:', e);
+        // Only redirect if it's NOT a UI error
+        if (e.message === 'Network error' || e.name === 'TypeError') {
+            console.warn('🚨 Redirección por pérdida de conexión o sesión inexistente.');
+            window.location.href = '/admin-login'; 
+        }
     }
 }
 
@@ -570,19 +819,33 @@ function closeFirmwareModal() { document.getElementById('firmware-modal').classL
 
 async function saveFirmware() {
     const version = document.getElementById('fw-version').value;
-    const filename = document.getElementById('fw-filename').value;
+    const binaryFile = document.getElementById('fw-binary').files[0];
     const changelog = document.getElementById('fw-changelog').value;
-    if(!version || !filename) return sonner('Campos requeridos', 'error');
+
+    if(!version || !binaryFile) return sonner('Faltan datos obligatorios', 'error');
+
+    if (!binaryFile.name.toLowerCase().endsWith('.bin')) {
+        return sonner('Archivo no válido', 'error', 'Solo se permiten archivos .bin para OTA');
+    }
+
+    const formData = new FormData();
+    formData.append('version', version);
+    formData.append('binary', binaryFile);
+    formData.append('changelog', changelog);
+
+    sonner('Subiendo binario...', 'info', 'OTA ENGINE');
 
     const r = await fetch(`${API_URL}/admin/firmwares`, {
         method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ version, filename, changelog })
+        body: formData
     });
+
     if (r.ok) {
-        sonner('Firmware registrado', 'success', 'OTA ENGINE');
+        sonner('Firmware desplegado', 'success', 'Versión registrada en el sistema');
         closeFirmwareModal();
         loadAllData();
+    } else {
+        sonner('Error en la subida', 'error');
     }
 }
 
@@ -615,12 +878,15 @@ function openOpenDoorModal(id, name) {
 }
 function closeOpenDoorModal() { document.getElementById('open-door-modal').classList.add('hidden'); }
 
-async function sendAdminCommand(sensorId, cmd) {
+async function sendAdminCommand(sensorId, cmd, extraValue = null) {
     try {
+        const payload = { cmd };
+        if (cmd === 'ota_update') payload.version = extraValue;
+        
         const r = await fetch(`${API_URL}/admin/sensors/${sensorId}/command`, { 
             method:'POST', 
             headers:{'Content-Type':'application/json'}, 
-            body:JSON.stringify({cmd}) 
+            body:JSON.stringify(payload) 
         });
         if (r.ok) sonner('Comando enviado', 'success', `${cmd} → ${sensorId}`);
         else { 
