@@ -4,51 +4,48 @@
 
 ![Cold Sense Dashboard Mockup](https://raw.githubusercontent.com/flavioGonz/coldsense/main/mockup.png)
 
-## 🚀 Core Features
+## 🚀 Core Features (v3.5 Pulsar Update)
 
-### 📡 Smart Hardware (Unified Protocol v3.4)
-- **Mauri-Unified Protocol**: High-performance JSON telemetry with consistent data mapping.
-- **Real-time Telemetry**: Monitoring of interior/exterior temperatures (`tIn` / `tOut`).
-- **Door Security**: Detection of open/closed states with MQTT event mapping.
-- **Secure OTA Updates**: Remote firmware management via LAN-aware tunnels (binary .bin only).
-- **Local Control**: Execution of GPIO commands (reboot, door unlock) with ACK confirmation.
+### 📡 Smart Hardware (Unified Protocol v3.5)
+- **Auto-Discovery & Adoption**: Modern handshake flow where the server automatically provision devices via `adopt` and `config` MQTT commands.
+- **Mauri-Unified Protocol**: High-performance JSON telemetry (`tIn`, `tOut`, `hum`, `door`, `rssi`).
+- **Real-time Telemetry**: High-resolution monitoring of interior/exterior temperatures and humidity.
+- **Secure OTA Updates**: Remote firmware management via LAN-aware tunnels with automatic version tracking.
+- **ACK Confirmation**: Every command (Reboot, Open Door, OTA) is acknowledged by the hardware for a robust audit trail.
 
-### 🏢 Enterprise Portal (Client)
-- **Dynamic Dashboard**: High-fidelity cards with real-time status highlights (Normal, Warning, Critical).
-- **Auto-Update PWA**: Instant-update strategy (skipWaiting) ensuring the latest version on each load.
-- **Analytical Graphing**: High-resolution temperature history powered by Chart.js.
-- **Multi-branch Management**: Organize hardware by physical locations.
-- **Command Log**: Audit trail of every hardware interaction and its success state.
+### 🏢 Enterprise Portal (Client & PWA)
+- **Dynamic Dashboard**: Unifi-inspired UI with real-time status highlights and high-contrast dark/light themes.
+- **Bitácora de Alertas**: Real-time logging of critical events (T° breaches, native hardware alarms, security events).
+- **Interactive Graphs**: Historical data visualizer powered by Chart.js.
+- **Event Audit**: New **"DETALLE (RAW)"** column in the event flow for technical transparency of MQTT payloads.
+- **Progressive Web App (PWA)**: Desktop/Mobile experience with service workers and instant update strategy.
 
 ### 🛡️ Administrative Console
-- **SaaS Provisioning**: Manage client companies, subscriptions, and device limits.
-- **Credential Management**: Professional lock-driven UI for handling entreprise-level auth (User/Pass).
-- **Fleet Control**: Global view of all connected sensors with `CS-` prefixed ID support.
-- **IP/MAC Tracking**: Intelligent detection of hardware on the global SaaS network.
-- **Firmware Engine**: Repository of firmware versions with automated changelog management.
-- **Impersonation Mode**: Secure access to client dashboards for remote support.
+- **Fleet Management**: Global control of all sensors with `CS-` prefixed ID support.
+- **SaaS Provisioning**: Full management of client companies, subscriptions, and device limits.
+- **Firmware Repository**: Centralized .bin management with automatic versioning and changelogs.
+- **Impersonation Mode**: Secure remote support by accessing any client's dashboard with admin credentials.
+- **Network Traffic Log**: Real-time visualization of all MQTT traffic across the SaaS network.
 
 ---
 
 ## 🛠️ Stack & Architecture
 
 ### Backend (Node.js)
-- **Express.js**: RESTful API with secure `/api/client/sensors` isolation.
-- **Socket.io**: Real-time bi-directional events for telemetry and ACKs.
-- **MQTT (Aedes)**: Integrated broker for low-latency hardware communication.
-- **Bcrypt & JWT**: Industry-standard secure authentication.
-- **SQLite3**: Reliable and portable structured data storage.
+- **Express.js**: Secure RESTful API with JWT/Bcrypt authentication.
+- **Socket.io**: Low-latency bi-directional event stream.
+- **MQTT (Aedes)**: High-performance integrated broker for hardware orchestration.
+- **SQLite3**: ACID-compliant portable data storage.
 
-### Frontend (Modern Vanilla JS)
-- **Unifi-inspired UI**: Premium dark/light themes with high contrast and smooth transitions.
-- **Service Workers**: Advanced PWA caching and background update strategy.
-- **Lucide Icons**: Crisp, vector-based iconography.
-- **Tippy.js**: Contextual tooltips for optimal UX.
+### Frontend (Modern Vanilla JS/CSS)
+- **Unifi-inspired Aesthetics**: Premium dark mode with sleek borders and industrial icons.
+- **Lucide Icons & Tippy.js**: CRISP vector graphics and contextual UX feedback.
+- **Service Workers**: Advanced PWA caching for offline-first reliability.
 
 ### Firmware (C++/Arduino)
-- Optimized for **ESP32C6 Pulsar**.
-- **NVS Persistence**: Secure storage of adoption tokens and WiFi credentials.
-- **v3.4 Protocol Support**: Native integration with the ColdSense cloud infrastructure.
+- **Target Hardware**: ESP32-C6 (Pulsar Edition).
+- **Communication Protocol**: Mauri Protocol v3.5.
+- **Specification Documentation**: Detailed technical spec available in [SPEC_FIRMWARE_MAURI.md](./SPEC_FIRMWARE_MAURI.md).
 
 ---
 
@@ -73,11 +70,11 @@
 4. **Environment Configuration**:
    Create a `.env` file in `/server` with:
    - `PORT=4000`
-   - `JWT_SECRET=your_secure_secret`
+   - `JWT_SECRET=your_secure_secret_key`
 
-5. **Run the Server**:
+5. **Run Development Server**:
    ```bash
-   npm start
+   npm run dev
    ```
 
 ---
@@ -85,4 +82,5 @@
 ## 📄 License & Attribution
 
 Developed by **Antigravity AI** for the **Cold Sense Team**.  
-Specialized in high-reliability IoT ecosystems.
+Specialized in high-reliability industrial IoT ecosystems.
+© 2026 ColdSense Global.
