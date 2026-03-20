@@ -4,6 +4,8 @@ let socket;
 let allClients = [];
 let allSensors = [];
 let allEvents = [];
+let allCommands = [];
+let allAlerts = [];
 let allFirmwares = [];
 let latestTelemetry = {};
 let map, markers = {};
@@ -59,31 +61,45 @@ function initSocket() {
         allEvents.unshift(data);
         if (allEvents.length > 100) allEvents.pop();
         if (currentView === 'events') renderEvents();
+        if (currentView === 'alerts') renderAlerts();
+
+        // Alarm Detection (Pulsar v3.5 Support)
+        if (data.alarm === true || (data.tIn > 25) || (data.tIn < -20)) {
+            const alarmMsg = data.alarm === true ? 'ALARMA NATIVA ACTIVADA' : 'EXCESO TEMPERATURA';
+            allAlerts.unshift({
+                time: new Date().toISOString(),
+                sensorId: data.id,
+                msg: alarmMsg,
+                val: (data.tIn || '--') + '°C',
+                status: 'CRÍTICA'
+            });
+            if (currentView === 'alerts') renderAlerts();
+        }
     });
 
     socket.on('sensor-update', (data) => {
-        // PERSIST: We must translate server-side shorthand (tIn, tOut) to UI-side fields (temp_interior, etc.)
+        // 1. Data consistency: Ensure we use the SAME fields that renderDevices uses
         const mapped = {
             ...data,
             temp_interior: data.tIn,
             temp_exterior: data.tOut,
+            hum: data.hum,
             door_open: data.door,
-            uptime: data.uptime
+            uptime_secs: data.uptime
         };
         
         latestTelemetry[data.id] = mapped; 
         
         const s = allSensors.find(x => x.id === data.id);
         if (s) { 
-            // Update sensor in-memory to persist even if view re-renders
             s.rssi = data.rssi || s.rssi;
-            s.temp_interior = data.tIn !== undefined ? data.tIn : s.temp_interior;
-            s.temp_exterior = data.tOut !== undefined ? data.tOut : s.temp_exterior;
-            s.hum = data.hum !== undefined ? data.hum : s.hum;
-            s.door_open = data.door !== undefined ? data.door : s.door_open;
+            s.temp_interior = data.tIn ?? s.temp_interior;
+            s.temp_exterior = data.tOut ?? s.temp_exterior;
+            s.hum = data.hum ?? s.hum;
+            s.door_open = data.door ?? s.door_open;
+            s.uptime_secs = data.uptime ?? s.uptime_secs; 
             s.ip = data.ip || s.ip;
             s.mac = data.mac || s.mac;
-            s.uptime = data.uptime || s.uptime; 
             s.fw = data.fw || s.fw;
             s.last_seen = data.last_seen || s.last_seen;
 
@@ -121,10 +137,11 @@ function initSocket() {
 
 // ── Navigation ──
 function initNavigation() {
-    document.querySelectorAll('.nav-btn').forEach(btn => {
-        const view = btn.dataset.view;
-        if (!view) return;
-        btn.onclick = () => navigateTo(view, btn.querySelector('span')?.textContent || view);
+    document.querySelectorAll('.nav-btn[data-view]').forEach(btn => {
+        btn.onclick = () => {
+            const view = btn.getAttribute('data-view');
+            switchView(view);
+        };
     });
     document.getElementById('sidebar-toggle').onclick = () => {
         document.body.classList.toggle('sidebar-collapsed');
@@ -132,22 +149,41 @@ function initNavigation() {
     };
 }
 
-function navigateTo(view, title) {
-    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-    const activeBtn = document.querySelector(`[data-view="${view}"]`);
-    if (activeBtn) activeBtn.classList.add('active');
-    document.querySelectorAll('.view-module').forEach(v => v.classList.add('hidden'));
-    document.getElementById(`view-${view}`)?.classList.remove('hidden');
+function switchView(view) {
     currentView = view;
-    document.getElementById('view-title').textContent = title;
-    breadcrumbStack = [{ view, title }];
-    updateBreadcrumb();
+    // Update Sidebar
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+    document.querySelector(`.nav-btn[data-view="${view}"]`)?.classList.add('active');
+
+    // Update Modules
+    document.querySelectorAll('.view-module').forEach(m => m.classList.add('hidden'));
+    document.getElementById(`view-${view}`)?.classList.remove('hidden');
+
+    // Breadcrumbs
+    const titles = { 
+        dashboard: 'Resumen Industrial', 
+        devices: 'Control de Flota', 
+        clients: 'Empresas SaaS', 
+        firmwares: 'Repositorio Binarios',
+        events: 'Tráfico Tiempo Real',
+        alerts: 'Bitácora de Alertas',
+        commands: 'Cola de Órdenes',
+        map: 'Geolocalización',
+        config: 'Ajustes de Sistema'
+    };
+    document.getElementById('view-title').textContent = titles[view] || view.toUpperCase();
+    // The original `navigateTo` used `breadcrumbStack` and `updateBreadcrumb()`.
+    // This new `switchView` simplifies it to a static text.
+    // If dynamic breadcrumbs are still desired, `breadcrumbStack` logic needs to be re-integrated.
+    document.getElementById('breadcrumb').textContent = `SISTEMA / ${view.toUpperCase()}`;
+
     if (view === 'map') { initMap(); fetchMapData(); }
     if (view === 'devices') fetchDevices();
     if (view === 'clients') fetchClients();
-    if (view === 'firmwares') renderFirmwares();
+    if (view === 'firmwares') renderFirmwares(); // This was in original navigateTo
     if (view === 'events') renderEvents();
-    if (view === 'commands') fetchAdminCommands();
+    if (view === 'alerts') renderAlerts(); // Added alerts logic
+    if (view === 'commands') fetchAdminCommands(); // Original was fetchAdminCommands
     lucide.createIcons(); initTippy();
 }
 
@@ -222,12 +258,14 @@ function renderDevices(sensors) {
     const tbody = document.getElementById('sensors-list-body'); if (!tbody) return;
     tbody.innerHTML = filtered.map(s => {
         const tel = latestTelemetry[s.id] || {};
-        const tIn = tel.temp_interior !== undefined ? tel.temp_interior : s.temp_interior;
-        const tOut = tel.temp_exterior !== undefined ? tel.temp_exterior : s.temp_exterior;
-        const uptime = tel.uptime || s.uptime;
+        // Use the raw keys from the socket event if available
+        const tIn = tel.tIn !== undefined ? tel.tIn : (tel.temp_interior ?? s.temp_interior);
+        const tOut = tel.tOut !== undefined ? tel.tOut : (tel.temp_exterior ?? s.temp_exterior);
+        const hum = tel.hum !== undefined ? tel.hum : (tel.hum ?? s.hum);
+        const uptime = tel.uptime !== undefined ? tel.uptime : (tel.uptime_secs ?? s.uptime_secs);
         const ip = tel.ip || s.ip || '---';
         const mac = tel.mac || s.mac || '---';
-        const door = tel.door_open !== undefined ? tel.door_open : s.door_open;
+        const door = tel.door !== undefined ? tel.door : (tel.door_open ?? s.door_open);
         
         const latestFw = allFirmwares[0]?.version;
         const currentFw = tel.fw || s.fw;
@@ -252,23 +290,24 @@ function renderDevices(sensors) {
             </div></td>
             <td>
                 ${client}
-                <div style="display:flex; gap:6px; align-items:center; margin-top:4px;">
-                    ${fwPill} ${rssiHtml}
-                </div>
-            </td>
-            <td>
-                <div style="font-size:0.75rem; font-weight:600;">${ip}</div>
-                <div style="font-size:0.6rem; opacity:0.4; font-family:monospace;">${mac}</div>
             </td>
             <td><strong>${s.name || '---'}</strong></td>
             <td>
                 <div style="display:flex; gap:8px;">
-                    <div data-tippy-content="Interior"><span style="font-size:0.6rem; opacity:0.5;">IN</span> <strong style="color:var(--success)">${tIn !== undefined ? tIn+'°' : '--'}</strong></div>
-                    <div data-tippy-content="Exterior"><span style="font-size:0.6rem; opacity:0.5;">OUT</span> <strong style="color:var(--unifi-blue)">${tOut !== undefined ? tOut+'°' : '--'}</strong></div>
+                    <div data-tippy-content="Interior"><span style="font-size:0.6rem; opacity:0.5;">IN</span> <strong style="color:var(--success)">${(tIn != null) ? tIn+'°C' : '--'}</strong></div>
+                    <div data-tippy-content="Exterior"><span style="font-size:0.6rem; opacity:0.5;">OUT</span> <strong style="color:var(--unifi-blue)">${(tOut != null) ? tOut+'°C' : '--'}</strong></div>
                 </div>
             </td>
-            <td style="font-weight:800;color:${door?'var(--danger)':'var(--success)'};">${door !== undefined ? (door ? 'ABIERTA':'CERRADA') : '--'}</td>
-            <td style="font-size:0.75rem; font-weight:600;">${formatUptime(uptime)}</td>
+            <td><strong style="color:var(--unifi-blue)">${(hum != null) ? hum+'%' : '--'}</strong></td>
+            <td style="font-weight:800;color:${door?'var(--danger)':'var(--success)'};">${(door != null) ? (door ? 'ABIERTA':'CERRADA') : '--'}</td>
+            <td style="font-size:0.75rem; font-weight:600; opacity:0.6;">${(uptime != null) ? formatUptime(uptime) : '--'}</td>
+            <td>
+                ${currentFw ? `<span class="pill" style="font-size:0.6rem; background:rgba(0,102,255,0.08); color:var(--unifi-blue); font-weight:900;">${currentFw}</span>` : '<span style="opacity:0.3">---</span>'}
+            </td>
+            <td>
+                <div style="font-size:0.75rem; font-weight:600; color:var(--text-secondary);">${ip}</div>
+                ${rssiHtml}
+            </td>
             <td><div style="display:flex;gap:4px;justify-content:flex-end;">
                 <button class="action-btn" style="color:${needsUpdate?'var(--warning)':'var(--text-secondary)'};border-color:${needsUpdate?'var(--warning)':'var(--border-light)'};" onclick="openOtaModal('${s.id}')" data-tippy-content="Actualización OTA"><i data-lucide="zap" style="width:12px;height:12px;"></i></button>
                 <button class="action-btn" onclick="openEditModal('${s.id}',\`${(s.name||'').replace(/`/g,'')}\`,'${s.client_id||''}','${s.image_url||''}','${s.temp_min}','${s.temp_max}')" data-tippy-content="Editar"><i data-lucide="pencil" style="width:12px;height:12px;"></i></button>
@@ -644,7 +683,12 @@ async function renderEvents() {
                 </div>
             </td>
             <td style="font-size:0.65rem; font-weight:900;">${actionStr}</td>
-            <td style="text-align:right; color:var(--text-secondary); font-size:0.7rem; font-weight:600;">${new Date(d.timestamp || d.time).toLocaleString()}</td>
+            <td>
+                <div style="font-size:0.65rem; font-family:'JetBrains Mono'; opacity:0.6; max-width:400px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title='${(d.payload || '{}').replace(/'/g,"\"")}'>
+                    ${(d.payload || '---')}
+                </div>
+            </td>
+            <td style="text-align:right; color:var(--text-secondary); font-size:0.7rem; font-weight:600;">${new Date(d.timestamp || d.time).toLocaleTimeString()}</td>
         </tr>`;
     }).join('');
     lucide.createIcons();
@@ -894,4 +938,27 @@ async function sendAdminCommand(sensorId, cmd, extraValue = null) {
             sonner('Error', 'error', err.error || 'No se pudo enviar'); 
         }
     } catch(e) { sonner('Error de conexión', 'error'); }
+}
+
+function renderAlerts() {
+    const table = document.getElementById('alerts-table');
+    if (!table) return;
+    table.innerHTML = allAlerts.map(a => `
+        <tr class="fade-in">
+            <td style="font-size:0.7rem; font-weight:700; opacity:0.6;">${new Date(a.time).toLocaleTimeString()}</td>
+            <td><code style="font-size:0.7rem; font-weight:900; color:var(--text-primary);">${a.sensorId}</code></td>
+            <td style="font-weight:900; color:var(--danger); font-size:0.75rem;">${a.msg}</td>
+            <td style="font-weight:800;">${a.val}</td>
+            <td style="text-align:right;">
+                <span class="pill" style="background:rgba(239,68,68,0.1); color:var(--danger); font-weight:900; font-size:0.55rem;">PENDING</span>
+            </td>
+        </tr>
+    `).join('') || '<tr><td colspan="5" style="text-align:center; opacity:0.3; padding:2rem;">Sin alertas registradas</td></tr>';
+    lucide.createIcons();
+}
+
+function clearAlerts() {
+    allAlerts = [];
+    renderAlerts();
+    sonner('Bitácora vaciada', 'success');
 }

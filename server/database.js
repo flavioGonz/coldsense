@@ -55,6 +55,7 @@ const db = new sqlite3.Database(dbPath, (err) => {
         temp_min REAL DEFAULT -22.0,
         temp_max REAL DEFAULT -18.0,
         hum_max REAL DEFAULT 75.0,
+        hum REAL,
         door_max_mins INTEGER DEFAULT 5,
         buzzer_enabled BOOLEAN DEFAULT 1,
         lat REAL,
@@ -62,6 +63,10 @@ const db = new sqlite3.Database(dbPath, (err) => {
         last_seen DATETIME,
         FOREIGN KEY (client_id) REFERENCES clients (id)
       )`);
+
+      // Migrations: Add hum fields if missing for upgraded databases
+      db.run(`ALTER TABLE sensors ADD COLUMN hum REAL`, (err) => { /* ignore */ });
+      db.run(`ALTER TABLE telemetry ADD COLUMN hum_exterior REAL`, (err) => { /* ignore */ });
 
       // 4. Telemetry
       db.run(`CREATE TABLE IF NOT EXISTS telemetry (

@@ -297,10 +297,18 @@ select.unifi-input { appearance:none; cursor:pointer; }
 
 @media (max-width: 768px) {
     .sidebar { display: none !important; }
-    .main-carrier { margin-left: 0 !important; padding-bottom: 80px; }
-    .top-bar { padding: 0 1rem; height: 60px; }
+    .main-carrier { 
+        margin-left: 0 !important; 
+        padding-bottom: env(safe-area-inset-bottom, 80px);
+        padding-top: env(safe-area-inset-top, 0);
+    }
+    .top-bar { 
+        padding: env(safe-area-inset-top, 10px) 1rem 0 1rem; 
+        height: calc(60px + env(safe-area-inset-top, 0px)); 
+        align-items: center;
+    }
     .top-bar #sidebar-toggle { display: none; }
-    .view-module { padding: 1rem; }
+    .view-module { padding: 1.25rem 1rem; }
     .pwa-bottom-bar { display: flex; }
     
     .value { font-size: 1.6rem; }

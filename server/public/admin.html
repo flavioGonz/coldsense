@@ -79,9 +79,10 @@
             <button class="nav-btn" data-view="commands" data-tippy-content="Gestión de comandos ejecutados">
                 <i data-lucide="send" style="width:20px;height:20px;"></i><span>Comandos</span>
             </button>
-            <button class="nav-btn" data-view="map" data-tippy-content="Geolocalización">
-                <i data-lucide="map-pin" style="width:20px;height:20px;"></i><span>Mapa</span>
+            <button class="nav-btn" data-view="alerts" data-tippy-content="Bitácora de Alertas Críticas">
+                <i data-lucide="bell" style="width:20px;height:20px;"></i><span>Alertas</span>
             </button>
+            <button class="nav-btn" data-view="map" data-tippy-content="Geolocalización">
             <button class="nav-btn" data-view="config" data-tippy-content="Ajustes">
                 <i data-lucide="settings" style="width:20px;height:20px;"></i><span>Configuración</span>
             </button>
@@ -140,11 +141,13 @@
                         <thead><tr>
                             <th data-tippy-content="Dirección MAC"><i data-lucide="cpu" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> ID/HW</th>
                             <th><i data-lucide="building-2" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> CLIENTE</th>
-                            <th data-tippy-content="IP Local / MAC"><i data-lucide="network" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> RED (IP/MAC)</th>
-                            <th data-tippy-content="Nombre asignado"><i data-lucide="tag" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> DESCRIPCIÓN</th>
-                            <th data-tippy-content="Sensores térmicos (<In> / <Out>)"><i data-lucide="thermometer" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> TEMPS</th>
+                            <th data-tippy-content="Descripción del equipo"><i data-lucide="tag" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> DESCRIPCIÓN</th>
+                            <th data-tippy-content="Temperaturas (<In> / <Out>)"><i data-lucide="thermometer" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> TEMPS</th>
+                            <th data-tippy-content="Humedad relativa"><i data-lucide="droplets" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> HUM</th>
                             <th data-tippy-content="Estado de puerta"><i data-lucide="door-open" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> PUERTA</th>
                             <th data-tippy-content="Tiempo de actividad"><i data-lucide="clock" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> UPTIME</th>
+                            <th data-tippy-content="Software actual"><i data-lucide="code" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> FW</th>
+                            <th data-tippy-content="IP Local / MAC / RSSI"><i data-lucide="network" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> RED / SEÑAL</th>
                             <th style="text-align:right;">ACCIONES</th>
                         </tr></thead>
                         <tbody id="sensors-list-body"></tbody>
@@ -195,6 +198,28 @@
                 </table>
             </div>
         </section>
+        <!-- ALERTAS -->
+        <section id="view-alerts" class="view-module hidden">
+            <div class="enterprise-table-wrapper">
+                <div class="table-header">
+                    <h3 style="font-size:0.75rem; font-weight:900; letter-spacing:1px; color:var(--danger);"><i data-lucide="bell" style="width:14px;height:14px;vertical-align:middle;margin-right:6px;"></i> BITÁCORA DE ALERTAS</h3>
+                    <button onclick="clearAlerts()" class="btn-sm btn-ghost" style="color:var(--danger);"><i data-lucide="trash-2" style="width:12px;height:12px;"></i> Limpiar Todo</button>
+                </div>
+                <div style="overflow-x:auto;">
+                    <table>
+                        <thead><tr>
+                            <th><i data-lucide="calendar" style="width:11px;height:11px;vertical-align:middle;"></i> HORA</th>
+                            <th><i data-lucide="cpu" style="width:11px;height:11px;vertical-align:middle;"></i> EQUIPO</th>
+                            <th><i data-lucide="alert-triangle" style="width:11px;height:11px;vertical-align:middle;"></i> EVENTO</th>
+                            <th><i data-lucide="thermometer" style="width:11px;height:11px;vertical-align:middle;"></i> VALOR</th>
+                            <th style="text-align:right;">STATUS</th>
+                        </tr></thead>
+                        <tbody id="alerts-table"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
         <!-- EVENTOS -->
         <section id="view-events" class="view-module hidden">
             <div class="enterprise-table-wrapper">
@@ -208,10 +233,11 @@
                 <div style="max-height:calc(100vh - 200px); overflow:auto;">
                     <table>
                         <thead><tr>
-                            <th style="width:180px;"><i data-lucide="radio" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> Origen</th>
-                            <th>TIPO / TÓPICO</th>
-                            <th style="width:120px;">ACCIÓN</th>
-                            <th style="text-align:right;"><i data-lucide="clock" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> Hora</th>
+                            <th style="width:140px;"><i data-lucide="radio" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> ORIGEN</th>
+                            <th>TÓPICO / RUTA</th>
+                            <th style="width:100px;">ESTADO</th>
+                            <th style="min-width:200px;">DETALLE (RAW)</th>
+                            <th style="text-align:right; width:100px;"><i data-lucide="clock" style="width:11px;height:11px;vertical-align:middle;margin-right:3px;"></i> HORA</th>
                         </tr></thead>
                         <tbody id="events-log"></tbody>
                     </table>

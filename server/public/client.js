@@ -2,6 +2,9 @@ const socket = io();
 const API_URL = '/api';
 let allMySensors = [];
 let allBranches = [];
+let allClientEvents = [];
+let allAlerts = [];
+let myToken = null;
 let currentUser = null;
 let latestTelemetry = {};
 let currentView = 'dashboard';
@@ -114,13 +117,26 @@ function initSocket() {
             time: data.last_seen || new Date().toISOString(),
             type: 'TELEMETRÍA',
             rssi: data.rssi,
-            uptime_secs: data.uptime
+            uptime_secs: data.uptime,
+            payload: JSON.stringify(data)
         });
         if (allClientEvents.length > 50) allClientEvents.pop();
 
         if (currentView === 'dashboard') renderDashboardCards();
         if (currentView === 'devices') renderMyDevices();
         if (currentView === 'events') renderEvents();
+        
+        // Alarm detection
+        if (data.alarm === true || (data.tIn > 25) || (data.tIn < -20)) {
+            allAlerts.unshift({
+                time: new Date().toISOString(),
+                sensorId: data.id,
+                msg: data.alarm ? 'ALARMA NATIVA' : 'PUNTO CRÍTICO T°',
+                val: (data.tIn || '--') + '°C'
+            });
+            if (currentView === 'alerts') renderAlerts();
+            sonner(`ALERTA EN ${data.id}: ${data.alarm ? 'PUERTA / MOVIMIENTO' : 'TEMPERATURA'}`, 'danger', 'SEGURIDAD');
+        }
     });
 
     socket.on('sensor-ack', (data) => {
@@ -137,6 +153,16 @@ function initSocket() {
         
         if (currentView === 'commands') loadHistory();
         if (currentView === 'events') renderEvents();
+    });
+
+    socket.on('sensor-event', (data) => {
+        // Only log events relevant to this client's sensors
+        const isMine = allMySensors.some(s => data.topic.includes(s.id) || (data.sensor_id === s.id));
+        if (isMine || data.origin === 'SISTEMA') {
+            allClientEvents.unshift(data);
+            if (allClientEvents.length > 50) allClientEvents.pop();
+            if (currentView === 'events') renderEvents();
+        }
     });
 }
 
@@ -159,14 +185,19 @@ function renderAll() {
         vBread.textContent = "SISTEMA / HARDWARE";
         renderMyDevices(); 
     }
+    if(currentView==='alerts') {
+        vTitle.textContent = "HISTORIAL ALERTAS";
+        vBread.textContent = "SISTEMA / SEGURIDAD";
+        renderAlerts(); 
+    }
     if(currentView==='commands') {
         vTitle.textContent = "OPERACIONES";
         vBread.textContent = "SISTEMA / COMANDOS";
         loadHistory(); 
     }
     if(currentView==='events') {
-        vTitle.textContent = "HISTORIAL EVENTOS";
-        vBread.textContent = "SISTEMA / LOGS";
+        vTitle.textContent = "TIEMPO REAL";
+        vBread.textContent = "MQTT / TRÁFICO";
         renderEvents(); 
     }
     if(currentView==='branches') {
@@ -187,9 +218,9 @@ async function loadAllData() {
         const sensors = await sRes.json();
         allBranches = await bRes.json();
         
-        allMySensors = sensors; // Already filtered by server
+        allMySensors = sensors;
         
-        console.log('📶 Sensors found:', allMySensors.length);
+        await loadHistory();
         renderAll();
     } catch(e) {
         console.error('📦 Data Load Error:', e);
@@ -197,40 +228,112 @@ async function loadAllData() {
     }
 }
 
-async function loadHistory() {
-    const list = document.getElementById('history-table-body'); if(!list) return;
-    const r = await fetch(`${API_URL}/client/commands`);
-    const logs = await r.json();
-    list.innerHTML = logs.map(l => {
-        const isOk = l.status === 'success';
-        return `
-        <tr>
-            <td style="font-size:0.6rem; opacity:0.6;">${new Date(l.timestamp).toLocaleString()}</td>
-            <td><div style="font-weight:900; font-size:0.75rem; color:var(--unifi-blue);">${(l.command||'').toUpperCase()}</div></td>
-            <td><span class="label">${l.sensor_id}</span></td>
-            <td>
-                <span style="display:inline-flex; align-items:center; gap:6px; font-size:0.65rem; font-weight:800; color:${isOk ? 'var(--success)' : 'var(--warning)'};">
-                    <span class="status-orb" style="background:${isOk ? 'var(--success)' : 'var(--warning)'}"></span>
-                    ${isOk ? 'Recibido ok' : 'Enviado'}
-                </span>
-            </td>
-            <td><div style="font-family:monospace; font-size:0.6rem; letter-spacing:1px; opacity:0.4;">${l.cmd_id}</div></td>
-        </tr>
-    `}).join('');
+// ── Theme ──
+function toggleTheme() {
+    const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+    if (isLight) { document.documentElement.removeAttribute('data-theme'); localStorage.setItem('cs-theme','dark'); }
+    else { document.documentElement.setAttribute('data-theme','light'); localStorage.setItem('cs-theme','light'); }
     lucide.createIcons();
 }
 
-let allClientEvents = [];
+async function loadHistory() {
+    const list = document.getElementById('history-table-body');
+    const mini = document.getElementById('history-table-body-mini');
+    
+    try {
+        const r = await fetch(`${API_URL}/client/commands`);
+        const logs = await r.json();
+        
+        const html = logs.map(l => {
+            const isOk = l.status === 'success';
+            const badge = isOk 
+                ? '<span class="pill" style="background:rgba(0,212,129,0.1); color:var(--success); font-size:0.55rem;">OK</span>'
+                : '<span class="pill" style="background:rgba(0,102,255,0.1); color:var(--unifi-blue); font-size:0.55rem;">PEND</span>';
+            
+            return `
+            <tr>
+                <td style="font-size:0.6rem; opacity:0.6;">${new Date(l.timestamp).toLocaleTimeString()}</td>
+                <td><div style="font-weight:900; font-size:0.75rem; color:var(--text-primary); display:flex; align-items:center; gap:6px;">
+                    <i data-lucide="terminal" style="width:10px;height:10px;opacity:0.4;"></i>${(l.command||'').toUpperCase()}</div></td>
+                <td><code style="color:var(--text-primary); font-weight:700; font-size:0.7rem;">${l.sensor_id}</code></td>
+                <td>${badge}</td>
+                <td style="text-align:right;"><div style="font-family:monospace; font-size:0.55rem; opacity:0.2;">${l.cmd_id.slice(-6)}</div></td>
+            </tr>`;
+        }).join('');
+
+        if (list) list.innerHTML = html;
+        if (mini) mini.innerHTML = html.slice(0, 15); // Show only last 5 in mini
+        
+        lucide.createIcons();
+    } catch(e) { console.error('Error loading history:', e); }
+}
+
+// ── Modals ──
+let renamingSensorId = null;
+function openRenameModal(id, currentName) {
+    renamingSensorId = id;
+    document.getElementById('rename-input').value = currentName || '';
+    document.getElementById('rename-modal').classList.remove('hidden');
+    lucide.createIcons();
+}
+
+function closeRenameModal() {
+    document.getElementById('rename-modal').classList.add('hidden');
+    renamingSensorId = null;
+}
+
+async function saveRename() {
+    const newName = document.getElementById('rename-input').value;
+    if (!newName) return;
+    
+    const r = await fetch(`${API_URL}/client/sensors/${renamingSensorId}/rename`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newName })
+    });
+
+    if (r.ok) {
+        sonner('Hardware renombrado', 'success', renamingSensorId);
+        closeRenameModal();
+        loadAllData();
+    }
+}
+
+// Use global allClientEvents
 function renderEvents() {
     const list = document.getElementById('events-table-body'); if(!list) return;
-    list.innerHTML = allClientEvents.map(e => `
+    list.innerHTML = allClientEvents.map(e => {
+        let badgeColor = 'var(--unifi-blue)';
+        let badgeBg = 'rgba(0,102,255,0.05)';
+        let icon = 'activity';
+        
+        if (e.type === 'ACK') { badgeColor = 'var(--success)'; badgeBg = 'rgba(0,212,129,0.1)'; icon = 'check-circle'; }
+        if (e.type === 'FALLO HARDWARE') { badgeColor = 'var(--danger)'; badgeBg = 'rgba(239,68,68,0.1)'; icon = 'alert-octagon'; }
+        if (e.topic && (e.topic.includes('/cmd') || e.topic.includes('/config'))) { badgeColor = 'var(--unifi-blue)'; badgeBg = 'rgba(0,102,255,0.08)'; icon = 'send'; }
+        if (e.origin === 'SISTEMA' || e.origin === 'ADMIN' || e.origin === 'CLIENT') { badgeColor = 'var(--warning)'; badgeBg = 'rgba(245,158,11,0.1)'; icon = 'settings'; e.type = 'SISTEMA'; }
+
+        return `
         <tr>
-            <td style="font-size:0.65rem; opacity:0.5;">${new Date(e.time||e.timestamp).toLocaleTimeString()}</td>
-            <td><span class="label">${e.id || e.device_id}</span></td>
-            <td><span class="pill" style="background:rgba(0,102,255,0.05); color:var(--unifi-blue);">${(e.type||'heartbeat').toUpperCase()}</span></td>
-            <td style="font-size:0.7rem;">RSSI: ${e.rssi || '--'} dBm | Up: ${formatUptime(e.uptime_secs)}</td>
+            <td style="font-size:0.65rem; opacity:0.5; font-weight:700;">${new Date(e.time||e.timestamp).toLocaleTimeString()}</td>
+            <td><code style="color:var(--text-primary); font-weight:800; font-size:0.75rem;">${e.id || e.device_id}</code></td>
+            <td>
+                <span class="pill" style="background:${badgeBg}; color:${badgeColor}; display:inline-flex; align-items:center; gap:5px; font-weight:900; font-size:0.55rem; letter-spacing:0.5px;">
+                    <i data-lucide="${icon}" style="width:10px;height:10px;"></i> ${(e.type||'TELEMETRÍA').toUpperCase()}
+                </span>
+            </td>
+            <td>
+                <div style="display:flex; align-items:center; gap:12px; font-size:0.7rem;">
+                    <span style="opacity:0.6; display:flex; align-items:center; gap:4px;"><i data-lucide="wifi" style="width:12px;height:12px;"></i> ${e.rssi || '--'} dBm</span>
+                    <span style="opacity:0.6; display:flex; align-items:center; gap:4px;"><i data-lucide="clock" style="width:12px;height:12px;"></i> ${formatUptime(e.uptime_secs)}</span>
+                </div>
+            </td>
+            <td>
+                <div style="font-size:0.65rem; font-family:'JetBrains Mono'; opacity:0.6; max-width:250px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title='${(e.payload || '{}').replace(/'/g,"\"")}'>
+                    ${(e.payload || (e.details ? e.details : '---'))}
+                </div>
+            </td>
         </tr>
-    `).join('');
+    `}).join('');
     lucide.createIcons();
 }
 
@@ -355,25 +458,35 @@ function renderMyDevices() {
     const filtered = allMySensors.filter(s => s.id.toLowerCase().includes(term)||(s.name||'').toLowerCase().includes(term));
     table.innerHTML = filtered.map(s => {
         const tel = latestTelemetry[s.id]||{};
-        const tIn = tel.temp_interior !== undefined ? tel.temp_interior : s.temp_interior;
+        const tIn = tel.tIn !== undefined ? tel.tIn : (tel.temp_interior !== undefined ? tel.temp_interior : s.temp_interior);
+        const hum = tel.hum !== undefined ? tel.hum : s.hum;
+        const uptime = tel.uptime !== undefined ? tel.uptime : s.uptime_secs;
         const sig = getWifiIcon(tel.rssi || s.rssi);
-        const door = tel.door_open !== undefined ? tel.door_open : s.door_open;
+        const door = tel.door !== undefined ? tel.door : (tel.door_open !== undefined ? tel.door_open : s.door_open);
 
         return `<tr>
-            <td><span class="label">${s.id}</span></td>
-            <td><div style="font-weight:900;">${s.name || 'SIN NOMBRE'}</div></td>
-            <td style="font-weight:900; color:var(--success);">${tIn !== undefined ? tIn+' °C' : '--'}</td>
-            <td><span class="pill" style="color:${door?'var(--danger)':'var(--success)'};">${door?'ABIERTA':'CERRADA'}</span></td>
+            <td><code style="color:var(--text-primary); font-weight:700; font-size:0.75rem;">${s.id}</code></td>
+            <td><div style="font-weight:900; font-size:0.85rem;">${s.name || 'S/N'}</div></td>
             <td>
-                <div style="display:flex; align-items:center; gap:6px;">
-                    <i data-lucide="${sig.icon}" style="width:14px; height:14px; color:${sig.color};"></i>
-                    <span style="font-size:0.65rem; font-weight:800;">RSSI ${tel.rssi || s.rssi || '--'}</span>
-                </div>
+                ${s.fw ? `<span class="pill" style="font-size:0.6rem; background:rgba(0,102,255,0.08); color:var(--unifi-blue); font-weight:900;">${s.fw}</span>` : '<span style="opacity:0.3">---</span>'}
             </td>
             <td>
-                <div style="display:flex; gap:6px;">
-                    <button class="btn-sm btn-ghost" onclick="sendCommand('${s.id}','reboot')" data-tippy-content="Reiniciar"><i data-lucide="refresh-cw" style="width:12px;height:12px;"></i></button>
-                    <button class="btn-sm btn-ghost" onclick="sendCommand('${s.id}','open_door')" data-tippy-content="Abrir Puerta"><i data-lucide="unlock" style="width:12px;height:12px;"></i></button>
+                <div style="font-size:0.7rem; font-weight:700; color:var(--text-secondary); opacity:0.8;">${s.ip || '---'}</div>
+            </td>
+            <td style="font-weight:900; color:var(--success); font-size:0.85rem;">${tIn !== undefined ? tIn+' °C' : '--'}</td>
+            <td style="font-weight:900; color:var(--unifi-blue); font-size:0.85rem;">${hum !== undefined ? hum+' %' : '--'}</td>
+            <td><span class="pill" style="background:${door?'rgba(239,68,68,0.1)':'rgba(0,212,129,0.1)'}; color:${door?'var(--danger)':'var(--success)'}; font-weight:900; font-size:0.55rem;">
+                <i data-lucide="${door?'door-open':'door-closed'}" style="width:10px;height:10px;vertical-align:middle;"></i> ${door ? 'ABIERTA' : 'CERRADA'}</span>
+            </td>
+            <td><div style="color:${sig.color}; font-size:0.7rem; font-weight:700; display:flex; align-items:center; gap:4px;">
+                <i data-lucide="${sig.icon}" style="width:12px; height:12px;"></i> ${tel.rssi || s.rssi || '--'} dBm</div>
+                <div style="font-size:0.55rem; opacity:0.3; margin-top:2px;">Uptime: ${formatUptime(uptime)}</div>
+            </td>
+            <td style="text-align:right;">
+                <div style="display:flex; gap:6px; justify-content:flex-end;">
+                    <button class="action-btn" onclick="openRenameModal('${s.id}', \`${(s.name||'').replace(/'/g, "")}\`)" data-tippy-content="Renombrar"><i data-lucide="pencil" style="width:12px;height:12px;"></i></button>
+                    <button class="action-btn" onclick="sendCommand('${s.id}','reboot')" data-tippy-content="Reiniciar"><i data-lucide="refresh-cw" style="width:12px;height:12px;"></i></button>
+                    <button class="action-btn" onclick="sendCommand('${s.id}','open_door')" data-tippy-content="Abrir Puerta" style="color:var(--success);"><i data-lucide="unlock" style="width:12px;height:12px;"></i></button>
                 </div>
             </td>
         </tr>`;
@@ -562,4 +675,30 @@ if (window.matchMedia('(display-mode: standalone)').matches || window.innerWidth
     }, 3000);
 }
 
-window.onload = checkAuth;
+window.onload = () => {
+    const saved = localStorage.getItem('cs-theme');
+    if (saved === 'light') document.documentElement.setAttribute('data-theme', 'light');
+    checkAuth();
+};
+function renderAlerts() {
+    const table = document.getElementById('alerts-table');
+    if (!table) return;
+    table.innerHTML = allAlerts.map(a => `
+        <tr class="fade-in">
+            <td style="font-size:0.7rem; font-weight:700; opacity:0.6;">${new Date(a.time).toLocaleTimeString()}</td>
+            <td><code style="font-size:0.7rem; font-weight:900; color:var(--text-primary);">${a.sensorId}</code></td>
+            <td style="font-weight:900; color:var(--danger); font-size:0.75rem;">${a.msg}</td>
+            <td style="font-weight:800;">${a.val}</td>
+            <td style="text-align:right;">
+                <button onclick="sonner('Detalles enviados via Mail', 'info')" class="btn-sm btn-ghost" style="color:var(--unifi-blue);"><i data-lucide="info" style="width:12px;height:12px;"></i></button>
+            </td>
+        </tr>
+    `).join('') || '<tr><td colspan="5" style="text-align:center; opacity:0.3; padding:2rem;">Sin alertas críticas</td></tr>';
+    lucide.createIcons();
+}
+
+function clearAlerts() {
+    allAlerts = [];
+    renderAlerts();
+    sonner('Historial limpiado', 'success');
+}

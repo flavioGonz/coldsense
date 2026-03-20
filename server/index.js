@@ -101,7 +101,7 @@ aedes.on('publish', (packet, client) => {
     const payload = packet.payload.toString();
     const ts = new Date().toISOString();
 
-    const eventObj = { origin: client ? client.id : 'NUBE', topic, message: payload, time: ts };
+    const eventObj = { origin: client ? client.id : 'NUBE', topic, payload, time: ts };
     io.emit('sensor-event', eventObj);
 
     // Persist event history
@@ -136,80 +136,104 @@ aedes.on('publish', (packet, client) => {
 
     if (!deviceId) return; // Exit if no device ID found
     console.log(`📡 [MQTT_IN] Topic: ${topic} | Device identified as: ${deviceId}`);
-
     db.get('SELECT * FROM sensors WHERE id = ?', [deviceId], (err, row) => {
         if (!row) {
             // Auto-discovery: register new sensor (Mauri Protocol Support)
             db.run(`INSERT INTO sensors (id, status, last_seen) VALUES (?, 'pending', ?)`, [deviceId, ts]);
             io.emit('pending-sensor-discovery', { id: deviceId, time: ts });
-            console.log(`📡 [DISCOVERY] Mauri-Protocol compatible device: ${deviceId}`);
+            console.log(`📡 [DISCOVERY] Nuevo dispositivo: ${deviceId}`);
         } else {
             db.run(`UPDATE sensors SET last_seen = ? WHERE id = ?`, [ts, deviceId]);
-        }
-
-    // Handle Telemetry and ACKs
-    try {
-        const data = payload.trim().startsWith('{') ? JSON.parse(payload) : null;
-        if (!data) return;
-
-        // 1. Unified ACK Handling (topic /ack or data.type == 'ack')
-        if (topic.includes('/ack') || data.type === 'ack') {
-            const cId = data.cmd_id || data.cmdId;
-            if (!cId) return;
-            const status = data.status || 'success';
-            console.log(`✅ [ACK] Confirmación ID ${cId} de ${deviceId}: ${status}`);
             
-            db.run(`UPDATE command_history SET status = ?, ack_at = datetime('now','localtime') WHERE cmd_id = ?`, [status, cId], () => {
-                io.emit('sensor-ack', { sensorId: deviceId, cmdId: cId, status: status, time: ts });
-            });
-            return;
+            // AUTO-ADOPT: If device already 'adopted' in DB but sending on 'pending' topic
+            if (topic.includes('pending') && row.status === 'adopted') {
+                const configTopic = `coldsense/config/${deviceId}`;
+                const configPayload = JSON.stringify({ 
+                    device_name: row.name || deviceId, 
+                    temp_min: row.temp_min, 
+                    temp_max: row.temp_max,
+                    timestamp: ts
+                });
+                aedes.publish({ topic: configTopic, payload: Buffer.from(configPayload), qos: 1, retain: true });
+                
+                const cmdTopic = `coldsense/cmd/${deviceId}`;
+                const adoptPay = JSON.stringify({ cmd: 'adopt', clientId: row.client_id, time: ts });
+                aedes.publish({ topic: cmdTopic, payload: Buffer.from(adoptPay), qos: 1 });
+                
+                console.log(`📡 [PROVISIONING] Sending adopt & config to ${deviceId} (v3.5 compatible)`);
+                io.emit('sensor-event', { origin: 'SISTEMA', topic: configTopic, payload: configPayload, time: ts });
+                io.emit('sensor-event', { origin: 'SISTEMA', topic: cmdTopic, payload: adoptPay, time: ts });
+            }
         }
 
-        // 2. Telemetry Handling (Unified for /telemetry and coldsense/data)
-        if (topic.includes('/telemetry') || topic.includes('coldsense/data') || topic.includes('coldsense/status')) {
-            // Status support (online:true/false)
-            if (data.online === false) {
-                io.emit('sensor-update', { id: deviceId, status: 'offline', last_seen: ts });
+        // Handle Telemetry and ACKs
+        try {
+            const data = payload.trim().startsWith('{') ? JSON.parse(payload) : null;
+            if (!data) return;
+
+            // 1. Unified ACK Handling
+            if (topic.includes('/ack') || data.type === 'ack') {
+                const cId = data.cmd_id || data.cmdId;
+                if (!cId) return;
+                const status = data.status || 'success';
+                console.log(`✅ [ACK] ${deviceId}: ${status}`);
+                db.run(`UPDATE command_history SET status = ?, ack_at = datetime('now','localtime') WHERE cmd_id = ?`, [status, cId], () => {
+                    io.emit('sensor-ack', { sensorId: deviceId, cmdId: cId, status: status, time: ts });
+                });
                 return;
             }
 
-            // Broad parsing: match Mauri v3.4 + Legacy fields
-            const tIn = data.temp !== undefined ? data.temp : (data.temp_interior !== undefined ? data.temp_interior : data.t_in);
-            const tOut = data.temp_amb !== undefined ? data.temp_amb : (data.temp_exterior !== undefined ? data.temp_exterior : data.t_out);
-            const hum = data.hum !== undefined ? data.hum : data.h;
-            
-            // Door handling (Array vs Single field)
-            let door = data.door_open !== undefined ? data.door_open : (data.p !== undefined ? data.p : null);
-            if (data.doors && Array.isArray(data.doors) && data.doors.length > 0) {
-                door = data.doors[0].open;
+            // 2. Telemetry Handling (Unified for /telemetry and coldsense/data/pending)
+            if (topic.includes('/telemetry') || topic.includes('coldsense/data') || topic.includes('coldsense/status') || topic.includes('coldsense/pending')) {
+                console.log(`📡 [RAW_JSON] ${deviceId}: ${payload}`);
+                
+                if (data.online === false) {
+                    io.emit('sensor-update', { id: deviceId, status: 'offline', last_seen: ts });
+                    return;
+                }
+
+                // Robust Mapper for v3.0, v3.4 and v3.5
+                const tIn = data.temp !== undefined ? data.temp : (data.t_in !== undefined ? data.t_in : (data.t !== undefined ? data.t : (data.temp_interior !== undefined ? data.temp_interior : null)));
+                const tOut = data.temp_amb !== undefined ? data.temp_amb : (data.t_out !== undefined ? data.t_out : (data.ta !== undefined ? data.ta : (data.temp_exterior !== undefined ? data.temp_exterior : null)));
+                const hum = data.hum !== undefined ? data.hum : (data.h !== undefined ? data.h : (data.humidity !== undefined ? data.humidity : null));
+                
+                let door = data.door_open !== undefined ? data.door_open : (data.p !== undefined ? data.p : (data.door !== undefined ? data.door : null));
+                if (data.doors && Array.isArray(data.doors) && data.doors.length > 0) {
+                    door = data.doors[0].open;
+                }
+
+                const rssi = data.rssi || (data.w !== undefined ? data.w : (data.signal !== undefined ? data.signal : null));
+                const uptime = data.uptime_secs || (data.u !== undefined ? data.u : (data.uptime !== undefined ? data.uptime : null));
+                const ip = data.ip || null;
+                const mac = data.mac || null;
+                const fw = data.fw || null;
+
+                // Emit to UI
+                io.emit('sensor-update', { 
+                    id: deviceId, tIn, tOut, hum, door, rssi, uptime, ip, mac, fw, 
+                    last_seen: ts, ...data 
+                });
+                
+                // Persist telemetry only if we have at least one numeric reading
+                if (tIn !== null || tOut !== null || hum !== null) {
+                    db.run(`INSERT INTO telemetry (sensor_id, temp_interior, temp_exterior, hum_exterior, door_open, rssi) VALUES (?, ?, ?, ?, ?, ?)`, 
+                        [deviceId, tIn, tOut, hum, door ? 1 : 0, rssi]);
+                }
+                
+                // Update sensor metadata
+                const updates = ['last_seen = ?'];
+                const params = [ts];
+                if (fw) { updates.push('fw = ?'); params.push(fw); }
+                if (rssi) { updates.push('rssi = ?'); params.push(rssi); }
+                if (uptime) { updates.push('uptime_secs = ?'); params.push(uptime); }
+                if (hum !== undefined && hum !== null) { updates.push('hum = ?'); params.push(hum); }
+                if (ip) { updates.push('ip = ?'); params.push(ip); }
+                if (mac) { updates.push('mac = ?'); params.push(mac); }
+                
+                params.push(deviceId);
+                db.run(`UPDATE sensors SET ${updates.join(', ')} WHERE id = ?`, params);
             }
-
-            const rssi = data.rssi || (data.w !== undefined ? data.w : null);
-            const uptime = data.uptime_secs || data.u || null;
-            const ip = data.ip || null;
-            const mac = data.mac || null;
-            const fw = data.fw || null;
-
-            // Emit to ALL clients
-            io.emit('sensor-update', { id: deviceId, ...data, tIn, tOut, hum, door, rssi, uptime, ip, mac, fw, last_seen: ts });
-            
-            // Persist to telemetry table
-            db.run(`INSERT INTO telemetry (sensor_id, temp_interior, temp_exterior, door_open, rssi) VALUES (?, ?, ?, ?, ?)`, 
-                [deviceId, tIn, tOut, door ? 1 : 0, rssi]);
-            
-            // Update sensor metadata
-            const updates = ['last_seen = ?'];
-            const params = [ts];
-            if (fw) { updates.push('fw = ?'); params.push(fw); }
-            if (rssi) { updates.push('rssi = ?'); params.push(rssi); }
-            if (uptime) { updates.push('uptime_secs = ?'); params.push(uptime); }
-            if (ip) { updates.push('ip = ?'); params.push(ip); }
-            if (mac) { updates.push('mac = ?'); params.push(mac); }
-            
-            params.push(deviceId);
-            db.run(`UPDATE sensors SET ${updates.join(', ')} WHERE id = ?`, params);
-        }
-    } catch(e) { console.error('MQTT Parse error:', e.message); }
+        } catch(e) { console.error('MQTT Parse error:', e.message); }
     });
 });
 
@@ -396,9 +420,33 @@ app.delete('/api/admin/sensors/:id', (req, res) => {
     db.run(`DELETE FROM sensors WHERE id = ?`, [req.params.id], () => res.json({ ok: true }));
 });
 
-// Event history API
-app.get('/api/admin/events', (req, res) => {
-    db.all(`SELECT * FROM event_history ORDER BY id DESC LIMIT 100`, (err, rows) => res.json(rows || []));
+// Command history & cancellation
+app.get('/api/admin/commands', (req, res) => {
+    db.all(`SELECT * FROM command_history ORDER BY requested_at DESC LIMIT 100`, (err, rows) => res.json(rows || []));
+});
+
+app.delete('/api/admin/commands/:id', (req, res) => {
+    // We update the status to cancelled in DB
+    db.run(`UPDATE command_history SET status = 'cancelled' WHERE id = ?`, [req.params.id], () => {
+        res.json({ ok: true });
+    });
+});
+
+app.get('/api/admin/events', adminAuth, (req, res) => {
+    db.all(`SELECT sensor_id, topic, payload, timestamp FROM event_history ORDER BY id DESC LIMIT 100`, (err, rows) => {
+        res.json(rows || []);
+    });
+});
+
+app.get('/api/client/events', clientAuth, (req, res) => {
+    // For clients, we filter events that have their device ID in the topic or sensor_id
+    // But since sensor_id in event_history is often 'NUBE' or client-specific, we check sensors table
+    db.all(`SELECT h.* FROM event_history h 
+            JOIN sensors s ON h.sensor_id = s.id 
+            WHERE s.client_id = ? 
+            ORDER BY h.id DESC LIMIT 50`, [req.clientId], (err, rows) => {
+        res.json(rows || []);
+    });
 });
 
 app.post('/api/admin/impersonate', (req, res) => {
@@ -471,17 +519,31 @@ app.delete('/api/admin/firmwares/:id', (req, res) => {
 });
 
 app.get('/api/client/sensors', clientAuth, (req, res) => {
-    db.all(`SELECT s.*, b.name as branch_name 
-            FROM sensors s 
-            LEFT JOIN branches b ON s.branch_id = b.id 
-            WHERE s.client_id = ?`, [req.clientId], (err, rows) => {
+    let query = `SELECT s.*, b.name as branch_name FROM sensors s LEFT JOIN branches b ON s.branch_id = b.id`;
+    let params = [];
+    
+    if (req.role !== 'admin' || req.clientId) {
+        query += ` WHERE s.client_id = ?`;
+        params.push(req.clientId);
+    }
+
+    db.all(query, params, (err, rows) => {
         if (err) return res.status(500).json({ error: err.message });
         res.json(rows || []);
     });
 });
 
 app.get('/api/client/commands', clientAuth, (req, res) => {
-    db.all(`SELECT * FROM command_history WHERE client_id = ? ORDER BY id DESC LIMIT 50`, [req.clientId], (err, rows) => res.json(rows || []));
+    let query = `SELECT * FROM command_history`;
+    let params = [];
+    
+    if (req.role !== 'admin' || req.clientId) {
+        query += ` WHERE client_id = ?`;
+        params.push(req.clientId);
+    }
+    
+    query += ` ORDER BY id DESC LIMIT 50`;
+    db.all(query, params, (err, rows) => res.json(rows || []));
 });
 
 
@@ -495,7 +557,11 @@ function clientAuth(req, res, next) {
         req.clientId = decoded.clientId;
         req.role = decoded.role;
         
-        // Check client status and subscription in DB
+        // Allow admins to bypass client-specific checks if they have no clientId
+        if (decoded.role === 'admin' && !decoded.clientId) {
+            return next();
+        }
+
         db.get('SELECT status, subscription_end FROM clients WHERE id = ?', [decoded.clientId], (err, client) => {
             if (err || !client) return res.status(401).json({ error: 'Invalid client' });
             
@@ -529,7 +595,15 @@ function adminAuth(req, res, next) {
 
 // Branches
 app.get('/api/client/branches', clientAuth, (req, res) => {
-    db.all(`SELECT b.*, (SELECT COUNT(*) FROM sensors s WHERE s.branch_id = b.id) as sensor_count FROM branches b WHERE b.client_id = ?`, [req.clientId], (err, rows) => res.json(rows || []));
+    let query = `SELECT b.*, (SELECT COUNT(*) FROM sensors s WHERE s.branch_id = b.id) as sensor_count FROM branches b`;
+    let params = [];
+    
+    if (req.role !== 'admin' || req.clientId) {
+        query += ` WHERE b.client_id = ?`;
+        params.push(req.clientId);
+    }
+    
+    db.all(query, params, (err, rows) => res.json(rows || []));
 });
 
 app.post('/api/client/branches', clientAuth, (req, res) => {
@@ -600,7 +674,13 @@ app.post('/api/admin/sensors/:id/command', (req, res) => {
             // DUAL TOPIC STRATEGY: Publish to SaaS Path AND Mauri-Unified Path
             const saasTopic = `clients/${clientId}/sensors/${sensorId}/cmd`;
             const mauriTopic = `coldsense/cmd/${sensorId}`;
-            const payload = JSON.stringify({ cmd, version, url: fwUrl, cmdId, timestamp: new Date().toISOString() });
+            const payload = JSON.stringify({ 
+                cmd, 
+                version, 
+                url: fwUrl, 
+                cmd_id: cmdId, 
+                timestamp: new Date().toISOString() 
+            });
             
             db.run(`UPDATE sensors SET last_cmd_id = ?, last_cmd_status = 'pending' WHERE id = ?`, [cmdId, sensorId]);
             db.run(`INSERT INTO command_history (sensor_id, cmd_id, command, user_id, client_id) VALUES (?, ?, ?, ?, ?)`, 
@@ -613,7 +693,7 @@ app.post('/api/admin/sensors/:id/command', (req, res) => {
                 aedes.publish({ topic: mauriTopic, payload: Buffer.from(payload), qos: 1, retain: false }, () => {
                     console.log(`📡 [CMD] ${cmd} (${cmdId}) → ${sensorId} [Dual-Topic OK]`);
                     const origin = isAdmin ? 'ADMIN' : 'CLIENT';
-                    io.emit('sensor-event', { origin, topic: mauriTopic, message: payload, time: new Date().toISOString() });
+                    io.emit('sensor-event', { origin, topic: mauriTopic, payload, time: new Date().toISOString() });
                     res.json({ ok: true, cmd, cmdId, sensor: sensorId });
                 });
             });

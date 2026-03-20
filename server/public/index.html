@@ -46,6 +46,9 @@
             <button class="nav-btn" data-view="events" data-tippy-content="Monitoreo de latidos de hardware">
                 <i data-lucide="activity" style="width:20px;height:20px;"></i><span>Eventos</span>
             </button>
+            <button class="nav-btn" data-view="alerts" data-tippy-content="Bitácora de Alertas de Frío">
+                <i data-lucide="bell" style="width:20px;height:20px;"></i><span>Alertas</span>
+            </button>
             <button class="nav-btn" data-view="branches" data-tippy-content="Mapa de sucursales">
                 <i data-lucide="map-pin" style="width:20px;height:20px;"></i><span>Ubicaciones</span>
             </button>
@@ -93,17 +96,16 @@
         <section id="view-commands" class="view-module hidden">
             <div class="enterprise-table-wrapper">
                 <div class="table-header">
-                    <h3 style="font-size:0.75rem; font-weight:900; letter-spacing:1px;"><i data-lucide="send" style="width:14px;height:14px;vertical-align:middle;margin-right:6px;"></i> LOG DE COMANDOS</h3>
-                    <button class="btn-sm btn-ghost" onclick="loadHistory()"><i data-lucide="refresh-cw" style="width:12px;height:12px;"></i> Actualizar</button>
+                    <h3 style="font-size:0.75rem; font-weight:900; letter-spacing:1px;"><i data-lucide="send" style="width:14px;height:14px;vertical-align:middle;margin-right:6px;"></i> HISTORIAL DE COMANDOS</h3>
                 </div>
                 <div style="overflow-x:auto;">
                     <table>
                         <thead><tr>
-                            <th>FECHA</th>
-                            <th>COMANDO</th>
-                            <th>EQUIPO</th>
-                            <th>STATUS</th>
-                            <th>OPERACIÓN</th>
+                            <th data-tippy-content="Marca de tiempo"><i data-lucide="clock" style="width:11px;height:11px;vertical-align:middle;"></i> HORA</th>
+                            <th data-tippy-content="Acción ejecutada"><i data-lucide="terminal" style="width:11px;height:11px;vertical-align:middle;"></i> COMANDO</th>
+                            <th data-tippy-content="Identificador hardware"><i data-lucide="cpu" style="width:11px;height:11px;vertical-align:middle;"></i> SENSOR</th>
+                            <th data-tippy-content="Resultado de ejecución"><i data-lucide="info" style="width:11px;height:11px;vertical-align:middle;"></i> ESTADO</th>
+                            <th style="text-align:right;" data-tippy-content="Rastreador único"><i data-lucide="hash" style="width:11px;height:11px;vertical-align:middle;"></i> ID</th>
                         </tr></thead>
                         <tbody id="history-table-body"></tbody>
                     </table>
@@ -121,32 +123,78 @@
                 <div style="overflow-x:auto;">
                     <table>
                         <thead><tr>
-                            <th>ID</th>
-                            <th>NOMBRE</th>
-                            <th>TEMPS</th>
-                            <th>PUERTA</th>
-                            <th>NETWORK</th>
-                            <th>ACCIONES</th>
+                            <th data-tippy-content="Identificador del equipo"><i data-lucide="cpu" style="width:12px;height:12px;vertical-align:middle;"></i> ID</th>
+                            <th data-tippy-content="Etiqueta personalizada"><i data-lucide="tag" style="width:12px;height:12px;vertical-align:middle;"></i> NOMBRE</th>
+                            <th data-tippy-content="Lecturas térmicas"><i data-lucide="thermometer" style="width:12px;height:12px;vertical-align:middle;"></i> T°</th>
+                             <th data-tippy-content="Humedad relativa"><i data-lucide="droplets" style="width:12px;height:12px;vertical-align:middle;"></i> H%</th>
+                             <th data-tippy-content="Sensor magnético"><i data-lucide="door-open" style="width:12px;height:12px;vertical-align:middle;"></i> PUERTA</th>
+                             <th data-tippy-content="Software actual"><i data-lucide="code" style="width:12px;height:12px;vertical-align:middle;"></i> FW</th>
+                             <th data-tippy-content="Nivel de señal y actividad"><i data-lucide="wifi" style="width:12px;height:12px;vertical-align:middle;"></i> RED</th>
+                             <th style="text-align:right;"><i data-lucide="settings" style="width:12px;height:12px;vertical-align:middle;"></i> GESTIÓN</th>
                         </tr></thead>
                         <tbody id="my-sensors-table"></tbody>
+                    </table>
+                </div>
+
+                <!-- MINI HISTORY (Integrated into Devices View) -->
+                <div class="table-header" style="margin-top:2rem; border-top:1px solid var(--border-light); padding-top:1.5rem;">
+                    <h3 style="font-size:0.7rem; font-weight:900; letter-spacing:1px; opacity:0.6;"><i data-lucide="terminal" style="width:12px;height:12px;vertical-align:middle;margin-right:6px;"></i> ÚLTIMAS OPERACIONES REMOTAS</h3>
+                    <button class="btn-sm btn-ghost" onclick="loadHistory()"><i data-lucide="refresh-cw" style="width:12px;height:12px;"></i></button>
+                </div>
+                <div style="overflow-x:auto; max-height:300px;">
+                    <table class="mini-table">
+                        <tbody id="history-table-body-mini" style="font-size:0.65rem;"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+    <!-- MODAL: RENOMBRAR SENSOR -->
+    <div id="rename-modal" class="modal-overlay hidden">
+        <div class="modal-unifi" style="max-width:380px;">
+            <div class="modal-header">
+                <h2 style="font-weight:900; font-size:0.9rem; color:var(--text-primary);"><i data-lucide="pencil" style="width:16px;height:16px;vertical-align:middle;margin-right:6px;"></i> Renombrar Hardware</h2>
+                <button class="modal-close" onclick="closeRenameModal()"><i data-lucide="x" style="width:18px;height:18px;"></i></button>
+            </div>
+            <div style="padding:1rem 0;">
+                <label class="label">Nombre del Equipo</label>
+                <input type="text" id="rename-input" class="unifi-input" placeholder="Ej: Cámara Fría 01">
+            </div>
+            <div style="display:flex; gap:8px;">
+                <button onclick="saveRename()" class="btn-unifi" style="flex:1; background:var(--unifi-blue);">GUARDAR</button>
+                <button onclick="closeRenameModal()" class="btn-unifi" style="flex:0.5; background:var(--input-bg); color:var(--text-primary);">CANCELAR</button>
+            </div>
+        </div>
+    </div>
+
+                <div style="overflow-x:auto;">
+                    <table>
+                        <thead><tr>
+                            <th data-tippy-content="Marca de tiempo"><i data-lucide="calendar" style="width:11px;height:11px;vertical-align:middle;"></i> HORA</th>
+                            <th data-tippy-content="Identificador hardware"><i data-lucide="cpu" style="width:11px;height:11px;vertical-align:middle;"></i> EQUIPO</th>
+                            <th data-tippy-content="Evento detectado"><i data-lucide="alert-triangle" style="width:11px;height:11px;vertical-align:middle;"></i> ALERTA</th>
+                            <th data-tippy-content="Lectura sensor"><i data-lucide="thermometer" style="width:11px;height:11px;vertical-align:middle;"></i> VALOR</th>
+                            <th style="text-align:right;" data-tippy-content="Acciones"><i data-lucide="info" style="width:11px;height:11px;vertical-align:middle;"></i> INFO</th>
+                        </tr></thead>
+                        <tbody id="alerts-table"></tbody>
                     </table>
                 </div>
             </div>
         </section>
 
         <!-- EVENTOS -->
-        <section id="view-events" class="view-module hidden">
             <div class="enterprise-table-wrapper">
                 <div class="table-header">
-                    <h3 style="font-size:0.75rem; font-weight:900; letter-spacing:1px;"><i data-lucide="activity" style="width:14px;height:14px;vertical-align:middle;margin-right:6px;"></i> EVENTOS DE HARDWARE</h3>
+                    <h3 style="font-size:0.75rem; font-weight:900; letter-spacing:1px;"><i data-lucide="activity" style="width:14px;height:14px;vertical-align:middle;margin-right:6px;"></i> HISTORIAL DE EVENTOS</h3>
                 </div>
                 <div style="overflow-x:auto;">
                     <table>
                         <thead><tr>
-                            <th>HORA</th>
-                            <th>SENSOR</th>
-                            <th>TIPO</th>
-                            <th>DETALLES</th>
+                            <th data-tippy-content="Tiempo del evento"><i data-lucide="clock" style="width:11px;height:11px;vertical-align:middle;"></i> HORA</th>
+                            <th data-tippy-content="Dispositivo originario"><i data-lucide="cpu" style="width:11px;height:11px;vertical-align:middle;"></i> SENSOR</th>
+                            <th data-tippy-content="Clase de evento"><i data-lucide="tag" style="width:11px;height:11px;vertical-align:middle;"></i> TIPO</th>
+                            <th data-tippy-content="Métricas de hardware"><i data-lucide="bar-chart-2" style="width:11px;height:11px;vertical-align:middle;"></i> METADATOS</th>
+                            <th data-tippy-content="Contenido técnico"><i data-lucide="code" style="width:11px;height:11px;vertical-align:middle;"></i> DETALLE (RAW)</th>
                         </tr></thead>
                         <tbody id="events-table-body"></tbody>
                     </table>
@@ -157,7 +205,7 @@
         <!-- SUCURSALES -->
         <section id="view-branches" class="view-module hidden">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.5rem;">
-                <h3 style="font-size:0.75rem; font-weight:900;"><i data-lucide="map-pin" style="width:14px;height:14px;vertical-align:middle;margin-right:6px;"></i> SUCURSALES</h3>
+                <h3 style="font-size:0.75rem; font-weight:900;"><i data-lucide="map-pin" style="width:14px;height:14px;vertical-align:middle;margin-right:6px;"></i> SUCURSALES ACTIVAS</h3>
                 <button onclick="openBranchModal()" class="btn-sm btn-primary">+ GESTIONAR SEDE</button>
             </div>
             <div id="branches-list" class="metrics-grid"></div>
